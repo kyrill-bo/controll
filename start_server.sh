@@ -3,7 +3,8 @@
 
 echo "🌐 KVM Remote Server wird gestartet..."
 echo "📡 Server ist über das Netzwerk erreichbar (0.0.0.0:8765)"
-echo "Hotkey zum Umschalten: Cmd+>"
+echo "🖱️  Maus bewegt sich immer synchron"
+echo "Hotkey für Tastatur/Klicks: Cmd+>"
 echo "Zum Beenden: Ctrl+C"
 echo ""
 

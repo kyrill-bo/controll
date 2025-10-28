@@ -55,16 +55,30 @@ class KVMServer:
             # Getrennte Clients entfernen
             self.clients -= disconnected
     
+    async def send_mouse_sync(self, message):
+        """Mausbewegung synchron an alle Clients senden (immer aktiv)"""
+        if self.clients:
+            disconnected = set()
+            for client in self.clients:
+                try:
+                    await client.send(json.dumps(message))
+                except websockets.exceptions.ConnectionClosed:
+                    disconnected.add(client)
+            
+            # Getrennte Clients entfernen
+            self.clients -= disconnected
+    
     def on_mouse_move(self, x, y):
         """Maus-Bewegung abfangen"""
-        if self.capturing:
+        # Mausbewegung wird immer gesendet für synchrone Bewegung
+        if self.clients:  # Nur senden wenn Clients verbunden sind
             message = {
                 'type': 'mouse_move',
                 'x': x,
                 'y': y,
                 'timestamp': time.time()
             }
-            asyncio.create_task(self.send_to_clients(message))
+            asyncio.create_task(self.send_mouse_sync(message))
     
     def on_mouse_click(self, x, y, button, pressed):
         """Maus-Klick abfangen"""
@@ -135,19 +149,20 @@ class KVMServer:
             asyncio.create_task(self.send_to_clients(message))
     
     def toggle_capturing(self):
-        """Umschalten zwischen lokalem und Remote-Modus"""
+        """Umschalten zwischen lokalem und Remote-Modus für Tastatur/Klicks"""
         self.capturing = not self.capturing
-        status = "Remote-Steuerung AKTIV" if self.capturing else "Lokale Steuerung AKTIV"
+        status = "Remote-Tastatur/Klicks AKTIV" if self.capturing else "Lokale Tastatur/Klicks AKTIV"
         print(f"\n{'='*50}")
         print(f"Status: {status}")
+        print(f"🖱️  Maus bewegt sich immer synchron")
         print(f"{'='*50}")
         
         if self.capturing:
-            print("Tastatur und Maus werden jetzt an den Remote-Laptop gesendet")
+            print("Tastatur und Mausklicks werden jetzt an den Remote-Laptop gesendet")
             print("Drücken Sie Cmd+> um zurück zu wechseln")
         else:
-            print("Tastatur und Maus sind wieder lokal aktiv")
-            print("Drücken Sie Cmd+> um zu Remote-Laptop zu wechseln")
+            print("Tastatur und Mausklicks sind wieder lokal aktiv")
+            print("Drücken Sie Cmd+> um Remote-Modus zu aktivieren")
     
     def start_listeners(self):
         """Event-Listener starten"""
@@ -168,7 +183,8 @@ class KVMServer:
         self.keyboard_listener.start()
         
         print("Event-Listener gestartet")
-        print("Drücken Sie Cmd+> um Remote-Steuerung zu aktivieren")
+        print("🖱️  Mausbewegung ist immer synchron")
+        print("Drücken Sie Cmd+> um Tastatur/Klicks zu aktivieren")
     
     def stop_listeners(self):
         """Event-Listener stoppen"""
