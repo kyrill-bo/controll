@@ -7,12 +7,13 @@ import websockets
 import json
 import threading
 import time
+import argparse
 from pynput import mouse, keyboard
 from pynput.mouse import Button
 import pyautogui
 
 class KVMServer:
-    def __init__(self, host='localhost', port=8765):
+    def __init__(self, host='0.0.0.0', port=8765):
         self.host = host
         self.port = port
         self.clients = set()
@@ -20,14 +21,16 @@ class KVMServer:
         self.mouse_listener = None
         self.keyboard_listener = None
         
-        # Hotkey für das Umschalten (z.B. Ctrl+Alt+S)
-        self.switch_hotkey = {keyboard.Key.ctrl, keyboard.Key.alt, keyboard.KeyCode(char='s')}
+        # Hotkey für das Umschalten (Command+>)
+        self.switch_hotkey = {keyboard.Key.cmd, keyboard.Key.shift, keyboard.KeyCode.from_char('.')}
         self.pressed_keys = set()
         
         print(f"KVM Server wird gestartet auf {host}:{port}")
-        print("Hotkey zum Umschalten: Ctrl+Alt+S")
+        print("Hotkey zum Umschalten: Cmd+>")
+        if host == '0.0.0.0':
+            print("⚠️  Remote-Modus: Stellen Sie sicher, dass Port 8765 in der Firewall freigegeben ist")
     
-    async def register_client(self, websocket, path):
+    async def register_client(self, websocket):
         """Neuen Client registrieren"""
         self.clients.add(websocket)
         client_info = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
@@ -141,10 +144,10 @@ class KVMServer:
         
         if self.capturing:
             print("Tastatur und Maus werden jetzt an den Remote-Laptop gesendet")
-            print("Drücken Sie Ctrl+Alt+S um zurück zu wechseln")
+            print("Drücken Sie Cmd+> um zurück zu wechseln")
         else:
             print("Tastatur und Maus sind wieder lokal aktiv")
-            print("Drücken Sie Ctrl+Alt+S um zu Remote-Laptop zu wechseln")
+            print("Drücken Sie Cmd+> um zu Remote-Laptop zu wechseln")
     
     def start_listeners(self):
         """Event-Listener starten"""
@@ -165,7 +168,7 @@ class KVMServer:
         self.keyboard_listener.start()
         
         print("Event-Listener gestartet")
-        print("Drücken Sie Ctrl+Alt+S um Remote-Steuerung zu aktivieren")
+        print("Drücken Sie Cmd+> um Remote-Steuerung zu aktivieren")
     
     def stop_listeners(self):
         """Event-Listener stoppen"""
@@ -179,7 +182,11 @@ class KVMServer:
         self.start_listeners()
         
         try:
-            async with websockets.serve(self.register_client, self.host, self.port):
+            # Wrapper-Funktion für bessere Kompatibilität
+            async def handler(websocket, path=None):
+                await self.register_client(websocket)
+            
+            async with websockets.serve(handler, self.host, self.port):
                 print(f"Server läuft auf ws://{self.host}:{self.port}")
                 print("Warten auf Client-Verbindungen...")
                 await asyncio.Future()  # Läuft für immer
@@ -189,7 +196,21 @@ class KVMServer:
             self.stop_listeners()
 
 def main():
-    server = KVMServer()
+    parser = argparse.ArgumentParser(description='KVM Server - Remote Tastatur/Maus Steuerung')
+    parser.add_argument('--host', default='0.0.0.0', 
+                       help='Server Host-Adresse (default: 0.0.0.0 für remote access)')
+    parser.add_argument('--port', type=int, default=8765,
+                       help='Server Port (default: 8765)')
+    
+    args = parser.parse_args()
+    
+    server = KVMServer(host=args.host, port=args.port)
+    
+    print(f"Server startet auf {args.host}:{args.port}")
+    if args.host == '0.0.0.0':
+        print("🌐 Remote-Zugriff aktiviert - Server ist über das Netzwerk erreichbar")
+    else:
+        print("🏠 Lokaler Zugriff - Server nur lokal erreichbar")
     
     try:
         asyncio.run(server.start_server())
