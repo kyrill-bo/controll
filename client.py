@@ -16,9 +16,11 @@ class KVMClient:
         self.uri = f"ws://{server_host}:{server_port}"
         self.connected = False
         
-        # PyAutoGUI Einstellungen
+        # PyAutoGUI Einstellungen für maximale Performance
         pyautogui.FAILSAFE = False  # Deaktiviert Fail-Safe
-        pyautogui.PAUSE = 0.01     # Minimale Pause zwischen Aktionen
+        pyautogui.PAUSE = 0        # Keine Pause zwischen Aktionen
+        pyautogui.MINIMUM_DURATION = 0  # Keine Mindestdauer für Bewegungen
+        pyautogui.MINIMUM_SLEEP = 0     # Keine Mindest-Sleep-Zeit
         
         # Tastatur-Controller für spezielle Tasten
         self.keyboard_controller = keyboard.Controller()
@@ -58,7 +60,8 @@ class KVMClient:
         
         try:
             if event_type == 'mouse_move':
-                pyautogui.moveTo(data['x'], data['y'])
+                # Optimierte Mausbewegung ohne Dauer-Parameter
+                pyautogui.moveTo(data['x'], data['y'], duration=0)
                 
             elif event_type == 'mouse_click':
                 button_map = {
