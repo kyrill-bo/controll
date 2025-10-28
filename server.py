@@ -8,6 +8,7 @@ import json
 import threading
 import time
 import argparse
+import queue
 from pynput import mouse, keyboard
 from pynput.mouse import Button
 import pyautogui
@@ -20,6 +21,10 @@ class KVMServer:
         self.capturing = False
         self.mouse_listener = None
         self.keyboard_listener = None
+        
+        # Event-Queue für Thread-sichere Kommunikation
+        self.event_queue = queue.Queue()
+        self.loop = None
         
         # Hotkey für das Umschalten (Command+>)
         self.switch_hotkey = {keyboard.Key.cmd, keyboard.Key.shift, keyboard.KeyCode.from_char('.')}
@@ -68,6 +73,27 @@ class KVMServer:
             # Getrennte Clients entfernen
             self.clients -= disconnected
     
+    async def process_event_queue(self):
+        """Verarbeitet Events aus der Queue in der Async-Loop"""
+        while True:
+            try:
+                # Event aus Queue holen (non-blocking)
+                message = self.event_queue.get_nowait()
+                
+                # Je nach Event-Typ senden
+                if message.get('sync', False):
+                    # Synchrone Events (Mausbewegung) immer senden
+                    await self.send_mouse_sync(message)
+                else:
+                    # Normale Events nur im Capturing-Modus
+                    await self.send_to_clients(message)
+                    
+            except queue.Empty:
+                # Keine Events in Queue, kurz warten
+                await asyncio.sleep(0.001)  # 1ms Pause
+            except Exception as e:
+                print(f"Fehler beim Verarbeiten des Events: {e}")
+    
     def on_mouse_move(self, x, y):
         """Maus-Bewegung abfangen"""
         # Mausbewegung wird immer gesendet für synchrone Bewegung
@@ -76,9 +102,13 @@ class KVMServer:
                 'type': 'mouse_move',
                 'x': x,
                 'y': y,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'sync': True  # Markiert als synchron (immer senden)
             }
-            asyncio.create_task(self.send_mouse_sync(message))
+            try:
+                self.event_queue.put_nowait(message)
+            except queue.Full:
+                pass  # Queue voll, Event verwerfen
     
     def on_mouse_click(self, x, y, button, pressed):
         """Maus-Klick abfangen"""
@@ -89,9 +119,13 @@ class KVMServer:
                 'y': y,
                 'button': button.name,
                 'pressed': pressed,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'sync': False  # Nur im Capturing-Modus
             }
-            asyncio.create_task(self.send_to_clients(message))
+            try:
+                self.event_queue.put_nowait(message)
+            except queue.Full:
+                pass
     
     def on_mouse_scroll(self, x, y, dx, dy):
         """Maus-Scroll abfangen"""
@@ -102,9 +136,13 @@ class KVMServer:
                 'y': y,
                 'dx': dx,
                 'dy': dy,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'sync': False  # Nur im Capturing-Modus
             }
-            asyncio.create_task(self.send_to_clients(message))
+            try:
+                self.event_queue.put_nowait(message)
+            except queue.Full:
+                pass
     
     def on_key_press(self, key):
         """Tastendruck abfangen"""
@@ -124,9 +162,13 @@ class KVMServer:
             message = {
                 'type': 'key_press',
                 'key': key_data,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'sync': False  # Nur im Capturing-Modus
             }
-            asyncio.create_task(self.send_to_clients(message))
+            try:
+                self.event_queue.put_nowait(message)
+            except queue.Full:
+                pass
     
     def on_key_release(self, key):
         """Taste loslassen abfangen"""
@@ -144,9 +186,13 @@ class KVMServer:
             message = {
                 'type': 'key_release',
                 'key': key_data,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'sync': False  # Nur im Capturing-Modus
             }
-            asyncio.create_task(self.send_to_clients(message))
+            try:
+                self.event_queue.put_nowait(message)
+            except queue.Full:
+                pass
     
     def toggle_capturing(self):
         """Umschalten zwischen lokalem und Remote-Modus für Tastatur/Klicks"""
@@ -195,12 +241,16 @@ class KVMServer:
     
     async def start_server(self):
         """WebSocket-Server starten"""
+        self.loop = asyncio.get_running_loop()
         self.start_listeners()
         
         try:
             # Wrapper-Funktion für bessere Kompatibilität
             async def handler(websocket, path=None):
                 await self.register_client(websocket)
+            
+            # Event-Processing-Task starten
+            event_task = asyncio.create_task(self.process_event_queue())
             
             async with websockets.serve(handler, self.host, self.port):
                 print(f"Server läuft auf ws://{self.host}:{self.port}")
