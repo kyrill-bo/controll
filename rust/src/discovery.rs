@@ -50,10 +50,25 @@ impl Discovery {
     }
 
     pub fn new_with_sender(instance_id: String, name: String, ws_port: u16, event_tx: Option<Sender<DiscEvent>>) -> std::io::Result<Self> {
-        let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MCAST_PORT))?;
+        use socket2::{Domain, Protocol, Socket, Type};
+        // Determine primary interface IP for joining/sending
+        let local_ip: Ipv4Addr = primary_ip().parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
+        let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+        s.set_reuse_address(true)?;
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::fd::AsRawFd;
+            let fd = s.as_raw_fd();
+            let on: i32 = 1;
+            unsafe { libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT, &on as *const _ as *const _, std::mem::size_of_val(&on) as libc::socklen_t) };
+        }
+        s.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MCAST_PORT).into())?;
+        s.join_multicast_v4(&MCAST_GRP, &local_ip)?;
+        s.set_multicast_loop_v4(true)?;
+        s.set_multicast_ttl_v4(32)?;
+        s.set_multicast_if_v4(&local_ip)?;
+        let sock: UdpSocket = s.into();
         sock.set_read_timeout(Some(Duration::from_millis(500)))?;
-        sock.join_multicast_v4(&MCAST_GRP, &Ipv4Addr::UNSPECIFIED)?;
-        sock.set_multicast_loop_v4(true)?;
         Ok(Self { instance_id, name, ws_port, devices: HashMap::new(), sock, event_tx })
     }
 
@@ -65,6 +80,7 @@ impl Discovery {
 
     fn send_broadcast(&self, msg: &Message) {
         if let Ok(data) = serde_json::to_vec(msg) {
+            // Send on the socket configured with multicast IF
             let _ = self.sock.send_to(&data, SocketAddrV4::new(MCAST_GRP, MCAST_PORT));
         }
     }
