@@ -293,8 +293,8 @@ class App:
                     self.window['-LOG-'].update(f'Requesting control from {ip} [{inst}]\n', append=True)
                 except Exception:
                     pass
-                self.discovery.send_request(ip, self.current_options(values), to=inst)
-                self._set_status('Request sent - waiting for confirmation...')
+                self.discovery.send_request(ip, self.current_options(values), to=None)
+                self._set_status('Request sent - waiting for confirmation...' )
             except IndexError:
                 self._set_status('Could not parse device info.')
 
