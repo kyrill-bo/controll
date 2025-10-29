@@ -111,23 +111,28 @@ class Discovery(threading.Thread):
         data = json.dumps(payload).encode('utf-8')
         try:
             self.sock.sendto(data, (target_ip, MCAST_PORT))
-            try:
-                self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast {len(data)} bytes to {target_ip}:{MCAST_PORT}')
-            except Exception:
-                pass
+            print(f'[Discovery] unicast {len(data)} bytes to {target_ip}:{MCAST_PORT}')
         except Exception as e:
-            try:
-                self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast error to {target_ip}: {e}')
-            except Exception:
-                pass
+            print(f'[Discovery] unicast error to {target_ip}: {e}')
 
     def _broadcast(self, payload: dict):
         data = json.dumps(payload).encode('utf-8')
+        local_ip = get_primary_ip()
         try:
-            self.sock.sendto(data, (MCAST_GRP, MCAST_PORT))
-            print(f'[Discovery] broadcast {len(data)} bytes to {MCAST_GRP}:{MCAST_PORT}')
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            try:
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 32)
+            except Exception:
+                pass
+            s.sendto(data, (MCAST_GRP, MCAST_PORT))
         except Exception as e:
             print(f'[Discovery] broadcast error: {e}')
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
 
     def _send_beacon(self):
         msg = {
@@ -301,11 +306,7 @@ class App:
                 except Exception:
                     self._set_status('Could not parse device info.')
                     return True
-            try:
-                self.window['-LOG-'].update(f'Requesting control from {ip}\n', append=True)
-            except Exception:
-                pass
-            self.start_server()
+            self.window.write_event_value('-LOG_EVENT-', f'Requesting control from {ip}')
             self.discovery.send_request(ip, self.current_options(values), to=None)
             self._set_status('Request sent - waiting for confirmation...' )
 
@@ -313,11 +314,6 @@ class App:
         elif event == '-MANUAL-':
             host = sg.popup_get_text('Enter target host/IP:')
             if host:
-                try:
-                    self.window['-LOG-'].update(f'Requesting control from {host}\n', append=True)
-                except Exception:
-                    pass
-                self.start_server()
                 self.discovery.send_request(host, self.current_options(values), to=None)
                 self._set_status('Request sent - waiting for confirmation...')
 
