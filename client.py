@@ -17,7 +17,8 @@ from pynput import keyboard
 
 class KVMClient:
     def __init__(self, server_host='localhost', server_port=8765, map_mode='normalized',
-                 interp_enabled=False, interp_rate_hz=240, interp_step_px=10, deadzone_px=1):
+                 interp_enabled=False, interp_rate_hz=240, interp_step_px=10, deadzone_px=1,
+                 speed=1.0):
         self.server_host = server_host
         self.server_port = server_port
         self.uri = f"ws://{server_host}:{server_port}"
@@ -27,6 +28,7 @@ class KVMClient:
         self.interp_rate_hz = max(30, int(interp_rate_hz))  # sanity bounds
         self.interp_step_px = max(1, int(interp_step_px))
         self.deadzone_px = max(0, int(deadzone_px))
+        self.speed = max(0.1, float(speed))
         
         # PyAutoGUI Einstellungen für maximale Performance
         pyautogui.FAILSAFE = False  # Deaktiviert Fail-Safe
@@ -109,8 +111,8 @@ class KVMClient:
                                 self._last_incoming_norm = (x_norm, y_norm)
                                 return
                             last_xn, last_yn = self._last_incoming_norm
-                            dx = int((x_norm - last_xn) * max(1, cw-1))
-                            dy = int((y_norm - last_yn) * max(1, ch-1))
+                            dx = int((x_norm - last_xn) * max(1, cw-1) * self.speed)
+                            dy = int((y_norm - last_yn) * max(1, ch-1) * self.speed)
                             self._last_incoming_norm = (x_norm, y_norm)
                             # Deadzone-Filter gegen Mikro-Jitter
                             if abs(dx) < self.deadzone_px and abs(dy) < self.deadzone_px:
@@ -160,8 +162,8 @@ class KVMClient:
                             self._last_incoming_abs = (x, y)
                             return
                         last_x, last_y = self._last_incoming_abs
-                        dx = x - last_x
-                        dy = y - last_y
+                        dx = int((x - last_x) * self.speed)
+                        dy = int((y - last_y) * self.speed)
                         self._last_incoming_abs = (x, y)
                         # Deadzone-Filter gegen Mikro-Jitter
                         if abs(dx) < self.deadzone_px and abs(dy) < self.deadzone_px:
@@ -378,6 +380,7 @@ def main():
     parser.add_argument('--interp', action='store_true', help='Glättung der Mausbewegung aktivieren')
     parser.add_argument('--interp-rate-hz', type=int, default=240, help='Frequenz der Glättungsschritte (Default: 240 Hz)')
     parser.add_argument('--interp-step-px', type=int, default=10, help='Maximale Schrittgröße pro Glättungsschritt (Pixel)')
+    parser.add_argument('--speed', type=float, default=1.0, help='Geschwindigkeitsfaktor für Mausbewegungen (nur relative Modi)')
     parser.add_argument('--deadzone-px', type=int, default=1, help='Deadzone in Pixel zur Jitter-Filterung')
     args = parser.parse_args()
 
@@ -385,7 +388,8 @@ def main():
                       interp_enabled=args.interp,
                       interp_rate_hz=args.interp_rate_hz,
                       interp_step_px=args.interp_step_px,
-                      deadzone_px=args.deadzone_px)
+                      deadzone_px=args.deadzone_px,
+                      speed=args.speed)
 
     try:
         asyncio.run(client.run())

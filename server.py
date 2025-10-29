@@ -14,7 +14,10 @@ from pynput.mouse import Button
 import pyautogui
 
 class KVMServer:
-    def __init__(self, host='0.0.0.0', port=8765):
+    def __init__(self, host='0.0.0.0', port=8765,
+                 transmit_mouse: bool = True,
+                 transmit_keyboard: bool = True,
+                 switch_hotkey: str = 'f13'):
         self.host = host
         self.port = port
         self.clients = set()
@@ -39,12 +42,16 @@ class KVMServer:
         self._cursor_locked_pos = None
         self._is_warping_cursor = False
         
-        # Hotkey für das Umschalten (F13)
-        self.switch_hotkey = {keyboard.Key.f13}
+        # Hotkey für das Umschalten (konfigurierbar, Standard F13)
+        self.switch_hotkey = self._parse_hotkey(switch_hotkey)
         self.pressed_keys = set()
+
+        # Welche Eingaben werden übertragen
+        self.transmit_mouse = transmit_mouse
+        self.transmit_keyboard = transmit_keyboard
         
         print(f"KVM Server wird gestartet auf {self.host}:{self.port}")
-        print("Hotkey zum Umschalten: F13")
+        print("Hotkey zum Umschalten: " + (switch_hotkey.upper() if isinstance(switch_hotkey, str) else 'F13'))
         if self.host == '0.0.0.0':
             print("⚠️  Remote-Modus: Stellen Sie sicher, dass Port 8765 in der Firewall freigegeben ist")
     
@@ -171,6 +178,8 @@ class KVMServer:
         # Ignoriere künstliche Bewegungen durch eigenes Warpen
         if self._is_warping_cursor:
             return
+        if not self.transmit_mouse:
+            return
         now = time.perf_counter()
         # Throttling: Nur senden wenn genug Zeit vergangen ist (monoton, hochauflösend)
         if now - self.last_mouse_time < self.mouse_throttle:
@@ -224,7 +233,7 @@ class KVMServer:
     
     def on_mouse_click(self, x, y, button, pressed):
         """Maus-Klick abfangen"""
-        if self.capturing:
+        if self.capturing and self.transmit_mouse:
             message = {
                 'type': 'mouse_click',
                 'x': x,
@@ -241,7 +250,7 @@ class KVMServer:
     
     def on_mouse_scroll(self, x, y, dx, dy):
         """Maus-Scroll abfangen"""
-        if self.capturing:
+        if self.capturing and self.transmit_mouse:
             message = {
                 'type': 'mouse_scroll',
                 'x': x,
@@ -265,7 +274,7 @@ class KVMServer:
             self.toggle_capturing()
             return
         
-        if self.capturing:
+        if self.capturing and self.transmit_keyboard:
             try:
                 key_data = key.char if hasattr(key, 'char') and key.char else str(key)
             except AttributeError:
@@ -289,7 +298,7 @@ class KVMServer:
         except KeyError:
             pass
         
-        if self.capturing:
+        if self.capturing and self.transmit_keyboard:
             try:
                 key_data = key.char if hasattr(key, 'char') and key.char else str(key)
             except AttributeError:
@@ -452,6 +461,18 @@ class KVMServer:
             print("\nServer wird beendet...")
         finally:
             self.stop_listeners()
+
+    def _parse_hotkey(self, key_name: str):
+        """Erzeuge ein Set von Tasten für den Umschalt-Hotkey. Unterstützt einfache Funktions-Tasten."""
+        mapping = {
+            'f11': keyboard.Key.f11,
+            'f12': keyboard.Key.f12,
+            'f13': keyboard.Key.f13,
+            'f14': keyboard.Key.f14,
+        }
+        key_name = (key_name or '').lower()
+        key = mapping.get(key_name, keyboard.Key.f13)
+        return {key}
 
 def main():
     parser = argparse.ArgumentParser(description='KVM Server - Remote Tastatur/Maus Steuerung')
