@@ -33,6 +33,17 @@ function getPrimaryIp() {
   return '127.0.0.1';
 }
 
+function getIPv4Interfaces() {
+  const out = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const iface of ifaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) out.push({ name, address: iface.address, netmask: iface.netmask });
+    }
+  }
+  return out;
+}
+
 let mainWindow;
 let instanceId = uuidv4();
 let instanceName = os.hostname();
@@ -69,6 +80,7 @@ function createWindow() {
 
 function startDiscovery() {
   console.log('[Discovery] Starting on', MCAST_GRP, ':', MCAST_PORT);
+  console.log('[Discovery] Local interfaces:', getIPv4Interfaces());
   udpSocket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   udpSocket.on('error', (err) => console.error('[Discovery] UDP error', err));
   udpSocket.on('message', (msgBuf, rinfo) => {
@@ -120,11 +132,32 @@ function startDiscovery() {
   });
   udpSocket.bind(MCAST_PORT, () => {
     console.log('[Discovery] Bound to port', MCAST_PORT);
-    try { 
-      udpSocket.addMembership(MCAST_GRP); 
-      console.log('[Discovery] Joined multicast group', MCAST_GRP);
+    try {
+      udpSocket.setMulticastTTL(1);
+      udpSocket.setMulticastLoopback(true);
+      udpSocket.setBroadcast(true);
     } catch (err) {
-      console.error('[Discovery] Failed to join multicast:', err);
+      console.warn('[Discovery] Could not set multicast/broadcast options:', err);
+    }
+    // Join multicast on all IPv4 interfaces
+    const ifaces = getIPv4Interfaces();
+    let joined = 0;
+    for (const nic of ifaces) {
+      try {
+        udpSocket.addMembership(MCAST_GRP, nic.address);
+        joined++;
+        console.log('[Discovery] Joined multicast group', MCAST_GRP, 'on', nic.address, `(${nic.name})`);
+      } catch (err) {
+        console.warn('[Discovery] Failed to join on', nic.address, err?.message || err);
+      }
+    }
+    if (joined === 0) {
+      try {
+        udpSocket.addMembership(MCAST_GRP);
+        console.log('[Discovery] Joined multicast group (default iface)', MCAST_GRP);
+      } catch (err) {
+        console.error('[Discovery] Failed to join multicast (default):', err);
+      }
     }
   });
 
@@ -138,10 +171,21 @@ function startDiscovery() {
       ws_port: wsPort,
       version: 1
     });
-    console.log('[Discovery] Sending beacon as', instanceName, getPrimaryIp());
-    udpSocket.send(Buffer.from(payload, 'utf8'), MCAST_PORT, MCAST_GRP, (err) => {
-      if (err) console.error('[Discovery] Beacon send error:', err);
+    const buf = Buffer.from(payload, 'utf8');
+    const primary = getPrimaryIp();
+    try { udpSocket.setMulticastInterface(primary); } catch {}
+    console.log('[Discovery] Sending beacon as', instanceName, primary);
+    udpSocket.send(buf, MCAST_PORT, MCAST_GRP, (err) => {
+      if (err) console.error('[Discovery] Beacon send error (multicast):', err);
     });
+    // Fallback: also broadcast beacon in case multicast is filtered
+    try {
+      udpSocket.send(buf, MCAST_PORT, '255.255.255.255', (err) => {
+        if (err) console.warn('[Discovery] Beacon send error (broadcast):', err?.message || err);
+      });
+    } catch (err) {
+      console.warn('[Discovery] Broadcast send exception:', err?.message || err);
+    }
   }, BEACON_INTERVAL);
 
   // Prune stale devices
