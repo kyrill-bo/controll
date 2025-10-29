@@ -304,13 +304,28 @@ class KVMServer:
         except Exception:
             pass
         # Maus-Listener neu erstellen mit Suppression
-        self.mouse_listener = mouse.Listener(
-            on_move=self.on_mouse_move,
-            on_click=self.on_mouse_click,
-            on_scroll=self.on_mouse_scroll,
-            suppress=suppress
-        )
-        self.mouse_listener.start()
+        try:
+            self.mouse_listener = mouse.Listener(
+                on_move=self.on_mouse_move,
+                on_click=self.on_mouse_click,
+                on_scroll=self.on_mouse_scroll,
+                suppress=suppress
+            )
+            self.mouse_listener.start()
+        except Exception as e:
+            # Fallback ohne Suppression und Hinweis anzeigen
+            import sys
+            print("⚠️  Konnte Maus-Unterdrückung nicht aktivieren:", e)
+            print("   Hinweis: Auf macOS müssen Sie der App Zugriff unter Einstellungen > Datenschutz & Sicherheit > Bedienungshilfen gewähren.")
+            print(f"   Fügen Sie Ihren Terminal/Editor und den Python-Interpreter hinzu: {sys.executable}")
+            self.suppress_mouse = False
+            self.mouse_listener = mouse.Listener(
+                on_move=self.on_mouse_move,
+                on_click=self.on_mouse_click,
+                on_scroll=self.on_mouse_scroll,
+                suppress=False
+            )
+            self.mouse_listener.start()
     
     def _set_keyboard_suppression(self, suppress: bool):
         """Keyboard-Listener mit gewünschter Suppression neu starten."""
@@ -319,12 +334,25 @@ class KVMServer:
                 self.keyboard_listener.stop()
         except Exception:
             pass
-        self.keyboard_listener = keyboard.Listener(
-            on_press=self.on_key_press,
-            on_release=self.on_key_release,
-            suppress=suppress
-        )
-        self.keyboard_listener.start()
+        try:
+            self.keyboard_listener = keyboard.Listener(
+                on_press=self.on_key_press,
+                on_release=self.on_key_release,
+                suppress=suppress
+            )
+            self.keyboard_listener.start()
+        except Exception as e:
+            import sys
+            print("⚠️  Konnte Tastatur-Unterdrückung nicht aktivieren:", e)
+            print("   Hinweis: Auf macOS müssen Sie der App Zugriff unter Einstellungen > Datenschutz & Sicherheit > Bedienungshilfen gewähren.")
+            print(f"   Fügen Sie Ihren Terminal/Editor und den Python-Interpreter hinzu: {sys.executable}")
+            self.suppress_keyboard = False
+            self.keyboard_listener = keyboard.Listener(
+                on_press=self.on_key_press,
+                on_release=self.on_key_release,
+                suppress=False
+            )
+            self.keyboard_listener.start()
     
     def start_listeners(self):
         """Event-Listener starten"""
@@ -389,10 +417,18 @@ def main():
                        help='Server Host-Adresse (default: 0.0.0.0 für remote access)')
     parser.add_argument('--port', type=int, default=8765,
                        help='Server Port (default: 8765)')
+    parser.add_argument('--no-suppress-mouse', action='store_true',
+                        help='Lokale Maus nicht unterbinden (Fallback, wenn macOS Rechte fehlen)')
+    parser.add_argument('--no-suppress-keyboard', action='store_true',
+                        help='Lokale Tastatur nicht unterbinden (Fallback, wenn macOS Rechte fehlen)')
     
     args = parser.parse_args()
     
     server = KVMServer(host=args.host, port=args.port)
+    if args.no_suppress_mouse:
+        server.suppress_mouse = False
+    if args.no_suppress_keyboard:
+        server.suppress_keyboard = False
     
     print(f"Server startet auf {args.host}:{args.port}")
     if args.host == '0.0.0.0':
