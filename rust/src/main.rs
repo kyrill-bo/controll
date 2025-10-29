@@ -3,7 +3,8 @@ mod discovery;
 mod ws;
 mod gui;
 
-use discovery::{run_loop, run_loop_with_sender, Discovery, DiscEvent};
+use discovery::{run_loop_with_sender, DiscEvent};
+use crate::discovery::Discovery;
 use serde_json::json;
 use std::env;
 use uuid::Uuid;
@@ -87,7 +88,7 @@ async fn main() {
             std::thread::spawn(move || { let _ = discovery::run_loop_with_sender(inst2, name2, ws_port, Some(tx)); });
             let native_options = eframe::NativeOptions::default();
             let app = gui::UiApp::new(rx, ws_port, inst, name);
-            let _ = eframe::run_native("Controll", native_options, Box::new(|_| Box::new(app)));            
+            let _ = eframe::run_native("Controll", native_options, Box::new(|_| Ok::<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>>(Box::new(app))));            
         }
         _ => usage(),
     }

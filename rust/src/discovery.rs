@@ -146,7 +146,3 @@ pub fn run_loop_with_sender(inst: String, name: String, ws_port: u16, event_tx: 
     let mut last_beacon = Instant::now() - BEACON_INTERVAL;
     loop { disc.tick(&mut last_beacon); }
 }
-
-pub fn run_loop(inst: String, name: String, ws_port: u16) -> std::io::Result<()> {
-    run_loop_with_sender(inst, name, ws_port, None)
-}
