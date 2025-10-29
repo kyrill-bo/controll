@@ -118,3 +118,18 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Electron
+node_modules/
+npm-debug.log
+.yarn-integrity
+.yarn-metadata.json
+yarn-error.log
+yarn.lock
+pnpm-lock.yaml
+package-lock.json
+/dist
+/release
+/out
+.electron-builder/
+.webpack/

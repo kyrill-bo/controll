@@ -133,8 +133,32 @@ python client.py your-public-ip.com
 ```
 
 ### Automatischer Start
+
 ```bash
 # Linux/macOS Autostart
 crontab -e
 @reboot cd /path/to/kvm && python server.py
 ```
+
+## Electron GUI (optional)
+
+Alternativ zur Tkinter-Oberfläche gibt es eine Electron-App, die die bestehenden Python-Komponenten (server.py/client.py) als Subprozesse startet und die LAN-Erkennung sowie eine manuelle Verbindung anbietet.
+
+Voraussetzungen:
+
+- Node.js 18+
+- Python 3.10+ als `python3` verfügbar (oder env `PYTHON=/pfad/zu/python` setzen)
+
+Start:
+
+```bash
+cd electron
+npm install
+npm run start
+```
+
+Hinweise:
+
+- Multicast: 239.255.255.250:54545. Falls Multicast blockiert ist, „Manuell verbinden…“ nutzen.
+- Die Electron-App startet `server.py` und `client.py` als Subprozesse. macOS benötigt weiterhin Berechtigungen unter Systemeinstellungen → Sicherheit → Bedienungshilfen und Eingabeüberwachung.
+- Den Python-Interpreter für Electron per `PYTHON`-Umgebungsvariable überschreiben.

@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+    <title>KVM Control</title>
+    <style>
+      body { font-family: -apple-system, system-ui, sans-serif; margin: 0; }
+      header { padding: 12px; background: #111; color: #fff; }
+      main { padding: 12px; }
+      .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+      .devices { height: 260px; overflow: auto; border: 1px solid #ccc; border-radius: 6px; }
+      .device { padding: 8px; cursor: pointer; display:flex; justify-content:space-between; border-bottom: 1px solid #eee; }
+      .device:hover { background: #f7f7f7; }
+      .status { margin-top: 8px; color: #333; }
+      label { display: inline-flex; align-items:center; gap: 6px; }
+      input[type="number"] { width: 70px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h3>KVM Control</h3>
+    </header>
+    <main>
+      <div class="row" style="border:1px solid #ddd; padding:8px; border-radius:6px;">
+        <strong>Setup</strong>
+        <span id="lblPython">Python: (unbekannt)</span>
+        <button id="btnChoosePy">Python wählen…</button>
+        <button id="btnInstallDeps">Abhängigkeiten installieren</button>
+        <label>WS Port <input id="numPort" type="number" min="1" max="65535" value="8765"></label>
+        <button id="btnApplyPort">Übernehmen</button>
+        <button id="btnOpenAcc">Zugriffshilfen öffnen</button>
+        <button id="btnOpenInput">Eingabeüberwachung öffnen</button>
+      </div>
+      <div class="row">
+        <button id="btnRequest">Steuerung anfordern</button>
+        <button id="btnDisconnect">Trennen</button>
+        <button id="btnManual">Manuell verbinden…</button>
+        <button id="btnStartServer">Server starten</button>
+        <button id="btnStopServer">Server stoppen</button>
+      </div>
+      <div class="row">
+        <div>
+          <label>Mapping
+            <select id="selMap">
+              <option value="relative">relative</option>
+              <option value="normalized">normalized</option>
+              <option value="preserve">preserve</option>
+            </select>
+          </label>
+        </div>
+        <div>
+          <label><input type="checkbox" id="chkInterp" checked> Interpolation</label>
+        </div>
+        <div>
+          <label>Rate (Hz) <input id="numRate" type="number" value="240" min="30" max="1000"></label>
+        </div>
+        <div>
+          <label>Schritt (px) <input id="numStep" type="number" value="10" min="1" max="200"></label>
+        </div>
+        <div>
+          <label>Deadzone (px) <input id="numDead" type="number" value="1" min="0" max="20"></label>
+        </div>
+        <div>
+          <label>Speed × <input id="numSpeed" type="number" value="1.0" step="0.1" min="0.1" max="5"></label>
+        </div>
+        <div>
+          <label>Hotkey
+            <select id="selHotkey">
+              <option value="f13">F13</option>
+              <option value="f12">F12</option>
+              <option value="f11">F11</option>
+              <option value="f14">F14</option>
+            </select>
+          </label>
+        </div>
+        <div>
+          <label><input type="checkbox" id="chkTxMouse" checked> Maus senden</label>
+        </div>
+        <div>
+          <label><input type="checkbox" id="chkTxKeyboard" checked> Tastatur senden</label>
+        </div>
+      </div>
+
+      <div class="devices" id="devices"></div>
+
+      <div class="status" id="status">Bereit</div>
+    </main>
+    <script src="renderer.js"></script>
+  </body>
+</html>
