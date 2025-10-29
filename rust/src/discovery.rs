@@ -9,6 +9,7 @@ const MCAST_PORT: u16 = 54545;
 const BEACON_INTERVAL: Duration = Duration::from_secs(2);
 const DEVICE_TTL: Duration = Duration::from_secs(8);
 
+#[derive(Clone, Debug)]
 pub struct DeviceInfo {
     pub name: String,
     pub ip: String,
@@ -16,7 +17,10 @@ pub struct DeviceInfo {
     pub last_seen: Instant,
 }
 
+#[derive(Clone, Debug)]
 pub enum DiscEvent {
+    DevicesChanged(Vec<DeviceInfo>),
+    RequestReceived { from_inst: String, from_name: String, ws_host: String, ws_port: u16 },
     ResponseAccepted { host: String, port: u16 },
 }
 
@@ -67,7 +71,14 @@ impl Discovery {
 
     fn prune(&mut self) {
         let now = Instant::now();
+        let before = self.devices.len();
         self.devices.retain(|_, d| now.duration_since(d.last_seen) <= DEVICE_TTL);
+        if self.devices.len() != before {
+            if let Some(tx) = &self.event_tx {
+                let list: Vec<DeviceInfo> = self.devices.values().cloned().collect();
+                let _ = tx.send(DiscEvent::DevicesChanged(list));
+            }
+        }
     }
 
     pub fn tick(&mut self, last_beacon: &mut Instant) {
@@ -89,17 +100,21 @@ impl Discovery {
                             if instance_id != self.instance_id {
                                 self.devices.insert(instance_id.clone(), DeviceInfo { name, ip: ip.clone(), ws_port, last_seen: Instant::now() });
                                 println!("[disc] seen {} @ {}:{}", instance_id, ip, ws_port);
+                                if let Some(tx) = &self.event_tx {
+                                    let list: Vec<DeviceInfo> = self.devices.values().cloned().collect();
+                                    let _ = tx.send(DiscEvent::DevicesChanged(list));
+                                }
                             }
                         }
-                        Message::REQUEST_CONTROL { from, to, name, ws_host, ws_port: _, options: _ } => {
+                        Message::RequestControl { from, to, name, ws_host, ws_port, options: _ } => {
                             if to.as_deref().map(|t| t == self.instance_id).unwrap_or(true) {
                                 println!("[disc] request from {} ({})", name, from);
-                                let resp = Message::RESPONSE_CONTROL { from: self.instance_id.clone(), accepted: true };
-                                self.send_unicast(&ws_host, &resp);
-                                println!("[disc] sent accept to {}", ws_host);
+                                if let Some(tx) = &self.event_tx {
+                                    let _ = tx.send(DiscEvent::RequestReceived { from_inst: from, from_name: name, ws_host, ws_port });
+                                }
                             }
                         }
-                        Message::RESPONSE_CONTROL { from, accepted } => {
+                        Message::ResponseControl { from, accepted } => {
                             println!("[disc] response from {} accepted={}", from, accepted);
                             if accepted {
                                 let host = match src { std::net::SocketAddr::V4(v4) => v4.ip().to_string(), _ => "127.0.0.1".to_string() };
@@ -114,9 +129,15 @@ impl Discovery {
     }
 
     pub fn send_request(&self, target_ip: &str, options: serde_json::Value, to: Option<String>) {
-        let msg = Message::REQUEST_CONTROL { from: self.instance_id.clone(), to, name: self.name.clone(), ws_host: primary_ip(), ws_port: self.ws_port, options };
+        let msg = Message::RequestControl { from: self.instance_id.clone(), to, name: self.name.clone(), ws_host: primary_ip(), ws_port: self.ws_port, options };
         self.send_unicast(target_ip, &msg);
         println!("[disc] request sent to {}", target_ip);
+    }
+
+    pub fn send_response(&self, target_ip: &str, accepted: bool) {
+        let msg = Message::ResponseControl { from: self.instance_id.clone(), accepted };
+        self.send_unicast(target_ip, &msg);
+        println!("[disc] response sent to {} accepted={}", target_ip, accepted);
     }
 }
 

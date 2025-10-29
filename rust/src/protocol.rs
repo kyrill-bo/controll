@@ -10,7 +10,7 @@ pub enum Message {
         ws_port: u16,
         version: u32,
     },
-    REQUEST_CONTROL {
+    RequestControl {
         from: String,
         to: Option<String>,
         name: String,
@@ -18,7 +18,7 @@ pub enum Message {
         ws_port: u16,
         options: serde_json::Value,
     },
-    RESPONSE_CONTROL {
+    ResponseControl {
         from: String,
         accepted: bool,
     },
