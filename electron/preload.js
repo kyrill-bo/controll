@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('kvm', {
   onDevicesUpdate: (cb) => ipcRenderer.on('devices:update', (_e, data) => cb(data)),
   onStatusUpdate: (cb) => ipcRenderer.on('status:update', (_e, text) => cb(text)),
   onSetupLog: (cb) => ipcRenderer.on('setup:log', (_e, text) => cb(text)),
+  getDevices: () => ipcRenderer.invoke('devices:get'),
   startServer: (options) => ipcRenderer.invoke('server:start', options),
   stopServer: () => ipcRenderer.invoke('server:stop'),
   setServerPort: (port) => ipcRenderer.invoke('server:setPort', port),

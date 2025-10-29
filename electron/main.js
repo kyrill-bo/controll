@@ -336,6 +336,12 @@ ipcMain.handle('manual:request', (e, payload) => {
   sendRequest(host, body);
 });
 
+// Devices snapshot for late listeners
+ipcMain.handle('devices:get', () => {
+  const list = Array.from(devices.values()).sort((a, b) => a.name.localeCompare(b.name));
+  return list;
+});
+
 // Setup & config
 function loadConfig() {
   try {

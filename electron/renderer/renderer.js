@@ -136,4 +136,12 @@ window.kvm.onSetupLog((log) => {
   const cfg = await window.kvm.getConfig();
   if (cfg?.pythonPath) pythonPath.textContent = cfg.pythonPath;
   if (cfg?.wsPort) inputPort.value = cfg.wsPort;
+  // Fetch current devices snapshot in case we missed early beacons
+  try {
+    const list = await window.kvm.getDevices();
+    if (Array.isArray(list)) {
+      devices = list;
+      renderDevices();
+    }
+  } catch {}
 })();
