@@ -28,15 +28,16 @@ class KVMServer:
         
         # Performance-Optimierungen
         self.last_mouse_time = 0
-        self.mouse_throttle = 0.008  # Max 125 FPS (8ms zwischen Events)
+        # 6ms Throttle (~166 Hz) für geringere Latenz bei moderater Last
+        self.mouse_throttle = 0.006
         
-        # Hotkey für das Umschalten (Command+>)
-        self.switch_hotkey = {keyboard.Key.cmd, keyboard.Key.shift, keyboard.KeyCode.from_char('.')}
+        # Hotkey für das Umschalten (F13)
+        self.switch_hotkey = {keyboard.Key.f13}
         self.pressed_keys = set()
         
-        print(f"KVM Server wird gestartet auf {host}:{port}")
-        print("Hotkey zum Umschalten: Cmd+>")
-        if host == '0.0.0.0':
+        print(f"KVM Server wird gestartet auf {self.host}:{self.port}")
+        print("Hotkey zum Umschalten: F13")
+        if self.host == '0.0.0.0':
             print("⚠️  Remote-Modus: Stellen Sie sicher, dass Port 8765 in der Firewall freigegeben ist")
     
     async def register_client(self, websocket):
@@ -159,14 +160,14 @@ class KVMServer:
             
         self.last_mouse_time = current_time
         
-        # Mausbewegung wird immer gesendet für synchrone Bewegung
-        if self.clients:  # Nur senden wenn Clients verbunden sind
+        # Nur im Remote-Capturing senden (ein Gerät aktiv)
+        if self.clients and self.capturing:  # Nur senden wenn Clients verbunden und Capturing aktiv ist
             message = {
                 'type': 'mouse_move',
                 'x': x,
                 'y': y,
                 'timestamp': current_time,
-                'sync': True  # Markiert als synchron (immer senden)
+                'sync': False
             }
             try:
                 self.event_queue.put_nowait(message)
@@ -263,42 +264,62 @@ class KVMServer:
                 pass
     
     def toggle_capturing(self):
-        """Umschalten zwischen lokalem und Remote-Modus für Tastatur/Klicks"""
+        """Umschalten zwischen lokalem und Remote-Modus.
+        - Wenn aktiv: Maus/Klicks/Tastatur werden remote gesendet und lokale Maus wird unterbunden.
+        - Wenn inaktiv: Alles bleibt lokal; Remote erhält nichts.
+        """
         self.capturing = not self.capturing
-        status = "Remote-Tastatur/Klicks AKTIV" if self.capturing else "Lokale Tastatur/Klicks AKTIV"
+        status = "REMOTE AKTIV (nur Remote bewegt Maus)" if self.capturing else "LOKAL AKTIV (nur lokal bewegt Maus)"
         print(f"\n{'='*50}")
         print(f"Status: {status}")
-        print(f"🖱️  Maus bewegt sich immer synchron")
+        print(f"Hotkey: F13 zum Umschalten")
         print(f"{'='*50}")
-        
+
+        # Maus lokal unterbinden wenn Capturing aktiv, sonst erlauben
+        self._set_mouse_suppression(self.capturing)
+
         if self.capturing:
-            print("Tastatur und Mausklicks werden jetzt an den Remote-Laptop gesendet")
-            print("Drücken Sie Cmd+> um zurück zu wechseln")
+            print("➡️  Remote aktiv: Sende Maus/Tastatur/Klicks an Client. Lokale Maus unterbunden.")
         else:
-            print("Tastatur und Mausklicks sind wieder lokal aktiv")
-            print("Drücken Sie Cmd+> um Remote-Modus zu aktivieren")
-    
-    def start_listeners(self):
-        """Event-Listener starten"""
-        # Maus-Listener
+            print("⬅️  Lokal aktiv: Maus/Tastatur/Klicks lokal. Remote-Eingaben pausiert.")
+
+    def _set_mouse_suppression(self, suppress: bool):
+        """Maus-Listener mit gewünschter Suppression neu starten."""
+        try:
+            if self.mouse_listener:
+                self.mouse_listener.stop()
+        except Exception:
+            pass
+        # Maus-Listener neu erstellen mit Suppression
         self.mouse_listener = mouse.Listener(
             on_move=self.on_mouse_move,
             on_click=self.on_mouse_click,
-            on_scroll=self.on_mouse_scroll
+            on_scroll=self.on_mouse_scroll,
+            suppress=suppress
         )
-        
-        # Tastatur-Listener  
+        self.mouse_listener.start()
+    
+    def start_listeners(self):
+        """Event-Listener starten"""
+        # Maus-Listener (initial ohne Suppression)
+        self.mouse_listener = mouse.Listener(
+            on_move=self.on_mouse_move,
+            on_click=self.on_mouse_click,
+            on_scroll=self.on_mouse_scroll,
+            suppress=False
+        )
+
+        # Tastatur-Listener (nie suppress, damit Hotkey immer funktioniert)
         self.keyboard_listener = keyboard.Listener(
             on_press=self.on_key_press,
             on_release=self.on_key_release
         )
-        
+
         self.mouse_listener.start()
         self.keyboard_listener.start()
-        
+
         print("Event-Listener gestartet")
-        print("🖱️  Mausbewegung ist immer synchron")
-        print("Drücken Sie Cmd+> um Tastatur/Klicks zu aktivieren")
+        print("🖱️  Standard: Lokal aktiv. Drücke F13 für Remote (lokale Maus wird gesperrt)")
     
     def stop_listeners(self):
         """Event-Listener stoppen"""
@@ -320,7 +341,13 @@ class KVMServer:
             # Event-Processing-Task starten
             event_task = asyncio.create_task(self.process_event_queue())
             
-            async with websockets.serve(handler, self.host, self.port):
+            async with websockets.serve(
+                handler,
+                self.host,
+                self.port,
+                compression=None,  # geringere Latenz (nicht komprimieren)
+                max_queue=1        # kleine Warteschlange zur Latenzreduktion
+            ):
                 print(f"Server läuft auf ws://{self.host}:{self.port}")
                 print("Warten auf Client-Verbindungen...")
                 await asyncio.Future()  # Läuft für immer

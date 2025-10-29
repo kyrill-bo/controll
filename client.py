@@ -21,6 +21,9 @@ class KVMClient:
         pyautogui.PAUSE = 0        # Keine Pause zwischen Aktionen
         pyautogui.MINIMUM_DURATION = 0  # Keine Mindestdauer für Bewegungen
         pyautogui.MINIMUM_SLEEP = 0     # Keine Mindest-Sleep-Zeit
+        # macOS: Catch-up Zeit auf 0 für weniger Latenz (falls vorhanden)
+        if hasattr(pyautogui, 'DARWIN_CATCH_UP_TIME'):
+            pyautogui.DARWIN_CATCH_UP_TIME = 0
         
         # Tastatur-Controller für spezielle Tasten
         self.keyboard_controller = keyboard.Controller()
@@ -30,7 +33,7 @@ class KVMClient:
     async def connect_to_server(self):
         """Mit Server verbinden und Events empfangen"""
         try:
-            async with websockets.connect(self.uri) as websocket:
+            async with websockets.connect(self.uri, compression=None, max_queue=1) as websocket:
                 self.connected = True
                 print("✓ Verbunden mit KVM Server")
                 print("Bereit zum Empfangen von Remote-Events")
