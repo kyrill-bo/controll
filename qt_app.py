@@ -111,17 +111,17 @@ class Discovery(threading.Thread):
         data = json.dumps(payload).encode('utf-8')
         try:
             self.sock.sendto(data, (target_ip, MCAST_PORT))
-            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast {len(data)} bytes to {target_ip}:{MCAST_PORT}')
+            print(f'[Discovery] unicast {len(data)} bytes to {target_ip}:{MCAST_PORT}')
         except Exception as e:
-            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast error to {target_ip}: {e}')
+            print(f'[Discovery] unicast error to {target_ip}: {e}')
 
     def _broadcast(self, payload: dict):
         data = json.dumps(payload).encode('utf-8')
         try:
             self.sock.sendto(data, (MCAST_GRP, MCAST_PORT))
-            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] broadcast {len(data)} bytes to {MCAST_GRP}:{MCAST_PORT}')
+            print(f'[Discovery] broadcast {len(data)} bytes to {MCAST_GRP}:{MCAST_PORT}')
         except Exception as e:
-            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] broadcast error: {e}')
+            print(f'[Discovery] broadcast error: {e}')
 
     def _send_beacon(self):
         msg = {
@@ -215,6 +215,11 @@ class App:
              sg.Button('Disconnect', key='-DISCONNECT-')]
         ]
 
+        incoming_layout = [
+            [sg.Text('', key='-REQ_TEXT-')],
+            [sg.Button('Accept', key='-ACCEPT-'), sg.Button('Decline', key='-DECLINE-')]
+        ]
+
         settings_layout = [
             [sg.Text('Mapping:'), sg.Combo(['relative', 'normalized', 'preserve'], default_value='relative', key='-MAP-')],
             [sg.Text('Rate (Hz):'), sg.Spin(list(range(30, 1001)), initial_value=240, key='-RATE-')],
@@ -232,12 +237,14 @@ class App:
 
         layout = [
             [sg.Frame('Available Devices', devices_layout)],
+            [sg.Frame('Incoming Request', incoming_layout, key='-REQ_FRAME-', visible=False)],
             [sg.Frame('Settings', settings_layout)],
             [sg.Frame('Logs', logs_layout, key='-LOG_FRAME-', visible=False)],
             [sg.StatusBar('Ready', key='-STATUS-')]
         ]
 
         self.window = sg.Window('KVM Control', layout, finalize=True)
+        self.pending_request = None
         self.discovery = Discovery(self.instance_id, self.name, self.ws_port, self.window)
         self.discovery.start()
         prim_ip = get_primary_ip()
@@ -261,16 +268,15 @@ class App:
         elif event == '-REQUEST_RECEIVED-':
             req, addr = values[event]
             name = req.get('name', addr)
-            if sg.popup_yes_no(f'{name} wants to control this computer. Allow?', title='Remote Access') == 'Yes':
-                self.discovery.send_response(addr, True)
-                self.start_client(req.get('ws_host'), int(req.get('ws_port', 8765)), req.get('options', {}))
-                self._set_status('Connected as client')
-            else:
-                self.discovery.send_response(addr, False)
+            self.pending_request = (req, addr)
+            self.window['-REQ_TEXT-'].update(f"{name} requests control. Allow?")
+            self.window['-REQ_FRAME-'].update(visible=True)
+            self.window.write_event_value('-LOG_EVENT-', f'[App] Request from {name} {addr}')
 
         elif event == '-RESPONSE_RECEIVED-':
             resp, _addr = values[event]
             if resp.get('accepted'):
+                self.start_server()
                 self._set_status('Control granted - Remote active')
             else:
                 self._set_status('Control denied')
@@ -280,12 +286,13 @@ class App:
                 self._set_status('Please select a device')
                 return True
             selected_device_str = values['-DEVICES-'][0]
-            # This is a bit fragile, we should store the device info properly
-            # For now, let's parse the string
             try:
                 ip = selected_device_str.split('  ')[1].split(':')[0]
                 inst = selected_device_str.split('[')[1].split(']')[0]
-                self.start_server()
+                try:
+                    self.window['-LOG-'].update(f'Requesting control from {ip} [{inst}]\n', append=True)
+                except Exception:
+                    pass
                 self.discovery.send_request(ip, self.current_options(values), to=inst)
                 self._set_status('Request sent - waiting for confirmation...')
             except IndexError:
@@ -295,7 +302,10 @@ class App:
         elif event == '-MANUAL-':
             host = sg.popup_get_text('Enter target host/IP:')
             if host:
-                self.start_server()
+                try:
+                    self.window['-LOG-'].update(f'Requesting control from {host}\n', append=True)
+                except Exception:
+                    pass
                 self.discovery.send_request(host, self.current_options(values), to=None)
                 self._set_status('Request sent - waiting for confirmation...')
 
@@ -308,6 +318,25 @@ class App:
             except Exception:
                 pass
             print(values[event])
+
+        elif event == '-ACCEPT-':
+            if self.pending_request:
+                req, addr = self.pending_request
+                self.discovery.send_response(addr, True)
+                try:
+                    self.start_client(req.get('ws_host'), int(req.get('ws_port', 8765)), req.get('options', {}))
+                except Exception as e:
+                    self.window.write_event_value('-LOG_EVENT-', f'[App] start_client error: {e}')
+                self._set_status('Connected as client')
+                self.window['-REQ_FRAME-'].update(visible=False)
+                self.pending_request = None
+
+        elif event == '-DECLINE-':
+            if self.pending_request:
+                _req, addr = self.pending_request
+                self.discovery.send_response(addr, False)
+                self.window['-REQ_FRAME-'].update(visible=False)
+                self.pending_request = None
 
         elif event == '-DISCONNECT-':
             self.disconnect_client()
