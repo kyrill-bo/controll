@@ -62,9 +62,15 @@ class Discovery(threading.Thread):
     def _create_socket(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except AttributeError:
+            pass
         sock.bind(('', MCAST_PORT))
         mreq = socket.inet_aton(MCAST_GRP) + socket.inet_aton('0.0.0.0')
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 32)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
         sock.settimeout(1.0)
         return sock
 
@@ -188,8 +194,7 @@ class App:
         setup_layout = [
             [sg.Text('Python:'), sg.Text(sys.executable, key='-PYTHON-')],
             [sg.Text('WS-Port:'), sg.Spin(list(range(1024, 65535)), initial_value=self.ws_port, key='-WS_PORT-'),
-             sg.Button('Apply', key='-APPLY_PORT-')],
-            [sg.Button('Install Dependencies', key='-INSTALL-')]
+             sg.Button('Apply', key='-APPLY_PORT-')]
         ]
 
         devices_layout = [
@@ -258,9 +263,6 @@ class App:
                 self.server_proc.kill()
                 self.server_proc = None
             self.start_server()
-
-        elif event == '-INSTALL-':
-            self.install_requirements()
 
         elif event == '-REQUEST-':
             if not values['-DEVICES-']:
@@ -333,9 +335,6 @@ class App:
             self._set_status('Client disconnected')
         else:
             self._set_status('No active client')
-
-    def install_requirements(self):
-        subprocess.Popen([sys.executable, '-m', 'pip', 'install', '-r', self._get_script_path('requirements.txt')])
 
     def cleanup(self):
         if self.discovery:
