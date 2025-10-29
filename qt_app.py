@@ -66,12 +66,18 @@ class Discovery(threading.Thread):
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         except AttributeError:
             pass
+        local_ip = get_primary_ip()
         sock.bind(('', MCAST_PORT))
-        mreq = socket.inet_aton(MCAST_GRP) + socket.inet_aton('0.0.0.0')
+        mreq = socket.inet_aton(MCAST_GRP) + socket.inet_aton(local_ip)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 32)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
         sock.settimeout(1.0)
+        try:
+            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] Bound on {local_ip}:{MCAST_PORT}, joined {MCAST_GRP}')
+        except Exception:
+            pass
         return sock
 
     def run(self):
@@ -90,6 +96,7 @@ class Discovery(threading.Thread):
 
             try:
                 data, addr = self.sock.recvfrom(1024)
+                self.window.write_event_value('-LOG_EVENT-', f'[Discovery] recv {len(data)} bytes from {addr[0]}')
                 self._handle_message(data, addr[0])
             except socket.timeout:
                 continue
@@ -102,11 +109,19 @@ class Discovery(threading.Thread):
 
     def _send(self, payload: dict, target_ip: str):
         data = json.dumps(payload).encode('utf-8')
-        self.sock.sendto(data, (target_ip, MCAST_PORT))
+        try:
+            self.sock.sendto(data, (target_ip, MCAST_PORT))
+            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast {len(data)} bytes to {target_ip}:{MCAST_PORT}')
+        except Exception as e:
+            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast error to {target_ip}: {e}')
 
     def _broadcast(self, payload: dict):
         data = json.dumps(payload).encode('utf-8')
-        self.sock.sendto(data, (MCAST_GRP, MCAST_PORT))
+        try:
+            self.sock.sendto(data, (MCAST_GRP, MCAST_PORT))
+            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] broadcast {len(data)} bytes to {MCAST_GRP}:{MCAST_PORT}')
+        except Exception as e:
+            self.window.write_event_value('-LOG_EVENT-', f'[Discovery] broadcast error: {e}')
 
     def _send_beacon(self):
         msg = {
@@ -128,7 +143,7 @@ class Discovery(threading.Thread):
                 del self._devices[inst]
                 removed = True
         if removed:
-            self.window.write_event_value(('-DEVICES_CHANGED-', {k: vars(v) for k, v in self._devices.items()}), None)
+            self.window.write_event_value('-DEVICES_CHANGED-', {k: vars(v) for k, v in self._devices.items()})
 
     def _handle_message(self, data: bytes, addr: str):
         try:
@@ -142,6 +157,7 @@ class Discovery(threading.Thread):
             inst = msg.get('instance_id')
             if not inst or inst == self.instance_id:
                 return
+            self.window.write_event_value('-LOG_EVENT-', f"[Discovery] BEACON from {addr} name={msg.get('name')} ws={msg.get('ws_port')}")
             dev = Device(
                 instance_id=inst,
                 name=msg.get('name', 'Unknown'),
@@ -212,7 +228,7 @@ class App:
             [sg.Checkbox('Show Logs', default=False, key='-SHOW_LOGS-')]
         ]
 
-        logs_layout = [[sg.Multiline('', size=(80, 10), key='-LOG-', autoscroll=True, write_only=True, disabled=True)]]
+        logs_layout = [[sg.Multiline('', size=(80, 10), key='-LOG-', autoscroll=True, disabled=False)]]
 
         layout = [
             [sg.Frame('Available Devices', devices_layout)],
@@ -224,6 +240,10 @@ class App:
         self.window = sg.Window('KVM Control', layout, finalize=True)
         self.discovery = Discovery(self.instance_id, self.name, self.ws_port, self.window)
         self.discovery.start()
+        prim_ip = get_primary_ip()
+        self.window.write_event_value('-LOG_EVENT-', f'[App] Discovery started, primary_ip={prim_ip}, ws_port={self.ws_port}')
+        if prim_ip == '127.0.0.1':
+            self.window.write_event_value('-LOG_EVENT-', '[App] WARNING: primary IP is 127.0.0.1; multicast won\'t reach other hosts')
 
     def _set_status(self, text: str):
         self.window['-STATUS-'].update(text)
@@ -283,7 +303,11 @@ class App:
             self.window['-LOG_FRAME-'].update(visible=values['-SHOW_LOGS-'])
 
         elif event == '-LOG_EVENT-':
-            self.window['-LOG-'].print(values[event])
+            try:
+                self.window['-LOG-'].update(values[event] + '\n', append=True)
+            except Exception:
+                pass
+            print(values[event])
 
         elif event == '-DISCONNECT-':
             self.disconnect_client()
