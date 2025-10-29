@@ -6,6 +6,12 @@ import asyncio
 import websockets
 import json
 import pyautogui
+# Optional macOS fast path for cursor movement
+try:
+    import Quartz
+    _HAS_QUARTZ = True
+except Exception:
+    _HAS_QUARTZ = False
 from pynput.keyboard import Key, Listener as KeyboardListener
 from pynput import keyboard
 
@@ -106,9 +112,16 @@ class KVMClient:
                 else:
                     x, y = int(data['x']), int(data['y'])
 
-                # Optimierte Mausbewegung ohne Dauer-Parameter, Duplikate vermeiden
+                # Optimierte Mausbewegung, Duplikate vermeiden
                 if self._last_mouse_pos != (x, y):
-                    pyautogui.moveTo(x, y, duration=0)
+                    if _HAS_QUARTZ:
+                        try:
+                            # CGWarpMouseCursorPosition erwartet ein CGPoint (x, y)
+                            Quartz.CGWarpMouseCursorPosition((x, y))
+                        except Exception:
+                            pyautogui.moveTo(x, y, duration=0)
+                    else:
+                        pyautogui.moveTo(x, y, duration=0)
                     self._last_mouse_pos = (x, y)
                 
             elif event_type == 'mouse_click':

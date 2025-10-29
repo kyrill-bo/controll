@@ -28,8 +28,8 @@ class KVMServer:
         
         # Performance-Optimierungen
         self.last_mouse_time = 0
-        # 6ms Throttle (~166 Hz) für geringere Latenz bei moderater Last
-        self.mouse_throttle = 0.006
+        # Standard-Throttle (~4ms ≈ 250 Hz) für flüssigere Bewegung
+        self.mouse_throttle = 0.004
         
         # Optionen für lokale Unterbindung
         self.suppress_mouse = True      # Lokale Maus unterbinden wenn Remote aktiv
@@ -125,8 +125,8 @@ class KVMServer:
                 # Mehrere Events auf einmal verarbeiten für bessere Performance
                 events_to_process = []
                 
-                # Sammle alle verfügbaren Events (bis zu 10 auf einmal)
-                for _ in range(10):
+                # Sammle alle verfügbaren Events (bis zu 25 auf einmal)
+                for _ in range(25):
                     try:
                         message = self.event_queue.get_nowait()
                         events_to_process.append(message)
@@ -157,7 +157,7 @@ class KVMServer:
                         await asyncio.gather(*tasks, return_exceptions=True)
                 else:
                     # Keine Events, minimale Pause
-                    await asyncio.sleep(0.0001)  # 0.1ms statt 1ms
+                    await asyncio.sleep(0.00005)  # 0.05ms
                     
             except Exception as e:
                 print(f"Fehler beim Verarbeiten des Events: {e}")
@@ -434,6 +434,8 @@ def main():
                         help='Lokale Maus nicht unterbinden (Fallback, wenn macOS Rechte fehlen)')
     parser.add_argument('--no-suppress-keyboard', action='store_true',
                         help='Lokale Tastatur nicht unterbinden (Fallback, wenn macOS Rechte fehlen)')
+    parser.add_argument('--mouse-throttle-ms', type=float, default=4.0,
+                        help='Mindestabstand zwischen Maus-Events in Millisekunden (Standard 4.0 ≈ 250 Hz)')
     
     args = parser.parse_args()
     
@@ -442,6 +444,8 @@ def main():
         server.suppress_mouse = False
     if args.no_suppress_keyboard:
         server.suppress_keyboard = False
+    if args.mouse_throttle_ms is not None and args.mouse_throttle_ms >= 0:
+        server.mouse_throttle = args.mouse_throttle_ms / 1000.0
     
     print(f"Server startet auf {args.host}:{args.port}")
     if args.host == '0.0.0.0':
