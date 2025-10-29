@@ -31,6 +31,7 @@ pub struct Discovery {
     pub devices: HashMap<String, DeviceInfo>,
     sock: UdpSocket,
     event_tx: Option<Sender<DiscEvent>>,
+    paused: bool,
 }
 
 fn primary_ip() -> String {
@@ -69,7 +70,7 @@ impl Discovery {
         s.set_multicast_if_v4(&local_ip)?;
         let sock: UdpSocket = s.into();
         sock.set_read_timeout(Some(Duration::from_millis(500)))?;
-        Ok(Self { instance_id, name, ws_port, devices: HashMap::new(), sock, event_tx })
+        Ok(Self { instance_id, name, ws_port, devices: HashMap::new(), sock, event_tx, paused: false })
     }
 
     fn send_unicast(&self, target_ip: &str, msg: &Message) {
@@ -99,6 +100,7 @@ impl Discovery {
 
     pub fn tick(&mut self, last_beacon: &mut Instant) {
         let now = Instant::now();
+        if self.paused { return; }
         if now.duration_since(*last_beacon) >= BEACON_INTERVAL {
             let msg = Message::BEACON { instance_id: self.instance_id.clone(), name: self.name.clone(), ip: primary_ip(), ws_port: self.ws_port, version: 1 };
             self.send_broadcast(&msg);
@@ -125,14 +127,15 @@ impl Discovery {
                         Message::RequestControl { from, to, name, ws_host, ws_port: _, options: _ } => {
                             if to.as_deref().map(|t| t == self.instance_id).unwrap_or(true) {
                                 println!("[disc] request from {} ({}) -> auto-accept", name, from);
-                                // Auto-accept: immediately respond accepted to requester
                                 let resp = Message::ResponseControl { from: self.instance_id.clone(), accepted: true };
                                 self.send_unicast(&ws_host, &resp);
+                                self.paused = true; // stop beaconing after connect
                             }
                         }
                         Message::ResponseControl { from, accepted } => {
                             println!("[disc] response from {} accepted={}", from, accepted);
                             if accepted {
+                                self.paused = true; // stop beaconing after connect
                                 let host = match src { std::net::SocketAddr::V4(v4) => v4.ip().to_string(), _ => "127.0.0.1".to_string() };
                                 let port = self.devices.get(&from).map(|d| d.ws_port).unwrap_or(self.ws_port);
                                 if let Some(tx) = &self.event_tx { let _ = tx.send(DiscEvent::ResponseAccepted { host, port }); }

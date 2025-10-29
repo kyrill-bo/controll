@@ -21,10 +21,19 @@ pub fn run_capture_client(url: String) {
     // Global grab: suppress local when capturing (toggle on F12)
     let _ = rdev::grab(move |event: Event| {
         match event.event_type {
-            EventType::KeyPress(Key::F12) => {
-                let now = !capturing_cb.load(std::sync::atomic::Ordering::Relaxed);
-                capturing_cb.store(now, std::sync::atomic::Ordering::Relaxed);
-                return Some(event);
+            EventType::KeyPress(k) => {
+                // Toggle on F13 (macOS keycode 105). Fallback: also accept F12.
+                let mut is_f13 = false;
+                #[allow(unused_mut)]
+                let mut code_opt: Option<u32> = None;
+                if let Key::Unknown(c) = k { code_opt = Some(c); }
+                #[cfg(target_os = "macos")]
+                { if let Some(c) = code_opt { if c == 105 { is_f13 = true; } } }
+                if is_f13 || matches!(k, Key::F12) {
+                    let now = !capturing_cb.load(std::sync::atomic::Ordering::Relaxed);
+                    capturing_cb.store(now, std::sync::atomic::Ordering::Relaxed);
+                    return Some(event);
+                }
             }
             EventType::MouseMove { x, y } => {
                 if capturing_cb.load(std::sync::atomic::Ordering::Relaxed) {
