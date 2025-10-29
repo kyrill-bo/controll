@@ -27,6 +27,8 @@ class KVMClient:
         
         # Tastatur-Controller für spezielle Tasten
         self.keyboard_controller = keyboard.Controller()
+        # Letzte Mausposition, um unnötige Bewegungen zu sparen
+        self._last_mouse_pos = None
         
         print(f"KVM Client - Verbinde zu {self.uri}")
     
@@ -63,8 +65,11 @@ class KVMClient:
         
         try:
             if event_type == 'mouse_move':
-                # Optimierte Mausbewegung ohne Dauer-Parameter
-                pyautogui.moveTo(data['x'], data['y'], duration=0)
+                # Optimierte Mausbewegung ohne Dauer-Parameter, Duplikate vermeiden
+                x, y = data['x'], data['y']
+                if self._last_mouse_pos != (x, y):
+                    pyautogui.moveTo(x, y, duration=0)
+                    self._last_mouse_pos = (x, y)
                 
             elif event_type == 'mouse_click':
                 button_map = {

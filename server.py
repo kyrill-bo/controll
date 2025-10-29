@@ -31,6 +31,10 @@ class KVMServer:
         # 6ms Throttle (~166 Hz) für geringere Latenz bei moderater Last
         self.mouse_throttle = 0.006
         
+        # Optionen für lokale Unterbindung
+        self.suppress_mouse = True      # Lokale Maus unterbinden wenn Remote aktiv
+        self.suppress_keyboard = True   # Lokale Tastatur unterbinden wenn Remote aktiv
+        
         # Hotkey für das Umschalten (F13)
         self.switch_hotkey = {keyboard.Key.f13}
         self.pressed_keys = set()
@@ -130,16 +134,24 @@ class KVMServer:
                         break
                 
                 if events_to_process:
-                    # Events parallel verarbeiten
-                    tasks = []
+                    # Mausbewegungen zusammenfassen: nur die letzte Position senden
+                    last_mouse_move = None
+                    others = []
                     for message in events_to_process:
+                        if message.get('type') == 'mouse_move':
+                            last_mouse_move = message
+                        else:
+                            others.append(message)
+
+                    tasks = []
+                    for message in others:
                         if message.get('sync', False):
-                            # Synchrone Events (Mausbewegung) immer senden
                             tasks.append(self.send_mouse_sync(message))
                         else:
-                            # Normale Events nur im Capturing-Modus
                             tasks.append(self.send_to_clients(message))
-                    
+                    if last_mouse_move is not None:
+                        tasks.append(self.send_to_clients(last_mouse_move))
+
                     # Alle Tasks parallel ausführen
                     if tasks:
                         await asyncio.gather(*tasks, return_exceptions=True)
@@ -275,8 +287,9 @@ class KVMServer:
         print(f"Hotkey: F13 zum Umschalten")
         print(f"{'='*50}")
 
-        # Maus lokal unterbinden wenn Capturing aktiv, sonst erlauben
-        self._set_mouse_suppression(self.capturing)
+        # Lokale Eingaben unterbinden wenn Capturing aktiv, sonst erlauben
+        self._set_mouse_suppression(self.capturing and self.suppress_mouse)
+        self._set_keyboard_suppression(self.capturing and self.suppress_keyboard)
 
         if self.capturing:
             print("➡️  Remote aktiv: Sende Maus/Tastatur/Klicks an Client. Lokale Maus unterbunden.")
@@ -298,6 +311,20 @@ class KVMServer:
             suppress=suppress
         )
         self.mouse_listener.start()
+    
+    def _set_keyboard_suppression(self, suppress: bool):
+        """Keyboard-Listener mit gewünschter Suppression neu starten."""
+        try:
+            if self.keyboard_listener:
+                self.keyboard_listener.stop()
+        except Exception:
+            pass
+        self.keyboard_listener = keyboard.Listener(
+            on_press=self.on_key_press,
+            on_release=self.on_key_release,
+            suppress=suppress
+        )
+        self.keyboard_listener.start()
     
     def start_listeners(self):
         """Event-Listener starten"""
