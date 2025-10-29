@@ -34,6 +34,10 @@ class KVMServer:
         # Optionen für lokale Unterbindung
         self.suppress_mouse = True      # Lokale Maus unterbinden wenn Remote aktiv
         self.suppress_keyboard = True   # Lokale Tastatur unterbinden wenn Remote aktiv
+        # Fallback: Cursor am Platz halten, wenn Suppression nicht möglich ist
+        self.lock_cursor_when_remote = True
+        self._cursor_locked_pos = None
+        self._is_warping_cursor = False
         
         # Hotkey für das Umschalten (F13)
         self.switch_hotkey = {keyboard.Key.f13}
@@ -164,6 +168,9 @@ class KVMServer:
     
     def on_mouse_move(self, x, y):
         """Maus-Bewegung abfangen mit Throttling"""
+        # Ignoriere künstliche Bewegungen durch eigenes Warpen
+        if self._is_warping_cursor:
+            return
         now = time.perf_counter()
         # Throttling: Nur senden wenn genug Zeit vergangen ist (monoton, hochauflösend)
         if now - self.last_mouse_time < self.mouse_throttle:
@@ -202,6 +209,18 @@ class KVMServer:
                     self.event_queue.put_nowait(message)  # Neues Event hinzufügen
                 except queue.Empty:
                     pass
+            # Falls Suppression nicht aktiv ist, Cursor an fester Position halten
+            if self.capturing and self.lock_cursor_when_remote and not self.suppress_mouse and self._cursor_locked_pos:
+                try:
+                    self._is_warping_cursor = True
+                    lx, ly = self._cursor_locked_pos
+                    # Schnelles Zurücksetzen der lokalen Mausposition
+                    pyautogui.moveTo(int(lx), int(ly), duration=0)
+                except Exception:
+                    pass
+                finally:
+                    # minimale Verzögerung vermeiden; Flag sofort zurücksetzen
+                    self._is_warping_cursor = False
     
     def on_mouse_click(self, x, y, button, pressed):
         """Maus-Klick abfangen"""
@@ -302,6 +321,17 @@ class KVMServer:
         # Lokale Eingaben unterbinden wenn Capturing aktiv, sonst erlauben
         self._set_mouse_suppression(self.capturing and self.suppress_mouse)
         self._set_keyboard_suppression(self.capturing and self.suppress_keyboard)
+
+        # Cursor-Lock-Position festlegen, wenn Suppression nicht genutzt wird
+        if self.capturing and self.lock_cursor_when_remote and not self.suppress_mouse:
+            try:
+                cx, cy = pyautogui.position()
+            except Exception:
+                sw, sh = pyautogui.size()
+                cx, cy = (sw // 2, sh // 2)
+            self._cursor_locked_pos = (cx, cy)
+        else:
+            self._cursor_locked_pos = None
 
         if self.capturing:
             print("➡️  Remote aktiv: Sende Maus/Tastatur/Klicks an Client. Lokale Maus unterbunden.")
