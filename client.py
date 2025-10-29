@@ -16,12 +16,16 @@ from pynput.keyboard import Key, Listener as KeyboardListener
 from pynput import keyboard
 
 class KVMClient:
-    def __init__(self, server_host='localhost', server_port=8765, map_mode='normalized'):
+    def __init__(self, server_host='localhost', server_port=8765, map_mode='normalized',
+                 interp_enabled=False, interp_rate_hz=240, interp_step_px=10):
         self.server_host = server_host
         self.server_port = server_port
         self.uri = f"ws://{server_host}:{server_port}"
         self.connected = False
         self.map_mode = map_mode  # 'normalized' (default) or 'preserve'
+        self.interp_enabled = interp_enabled
+        self.interp_rate_hz = max(30, int(interp_rate_hz))  # sanity bounds
+        self.interp_step_px = max(1, int(interp_step_px))
         
         # PyAutoGUI Einstellungen für maximale Performance
         pyautogui.FAILSAFE = False  # Deaktiviert Fail-Safe
@@ -39,6 +43,11 @@ class KVMClient:
         # Letzte eingehende Koordinaten für Relative-Mode
         self._last_incoming_norm = None  # (x_norm, y_norm)
         self._last_incoming_abs = None   # (x_abs, y_abs)
+        # Interpolation-Status
+        self._target_pos = None  # (x, y) Zielposition für absolute Modi
+        self._pending_dx = 0
+        self._pending_dy = 0
+        self._smoother_task = None
         
         print(f"KVM Client - Verbinde zu {self.uri}")
     
@@ -47,6 +56,9 @@ class KVMClient:
         try:
             async with websockets.connect(self.uri, compression=None, max_queue=1) as websocket:
                 self.connected = True
+                # Smoother starten, falls aktiviert
+                if self.interp_enabled and self._smoother_task is None:
+                    self._smoother_task = asyncio.create_task(self._smoothing_loop())
                 print("✓ Verbunden mit KVM Server")
                 print("Bereit zum Empfangen von Remote-Events")
                 
@@ -68,6 +80,13 @@ class KVMClient:
             print(f"✗ Verbindungsfehler: {e}")
         finally:
             self.connected = False
+            # Smoother stoppen
+            try:
+                if self._smoother_task:
+                    self._smoother_task.cancel()
+            except Exception:
+                pass
+            self._smoother_task = None
     
     async def handle_event(self, data):
         """Empfangenes Event verarbeiten"""
@@ -93,7 +112,11 @@ class KVMClient:
                             dy = int((y_norm - last_yn) * max(1, ch-1))
                             self._last_incoming_norm = (x_norm, y_norm)
                             if dx != 0 or dy != 0:
-                                pyautogui.moveRel(dx, dy, duration=0)
+                                if self.interp_enabled:
+                                    self._pending_dx += dx
+                                    self._pending_dy += dy
+                                else:
+                                    pyautogui.moveRel(dx, dy, duration=0)
                             return
 
                         if self.map_mode == 'preserve' and data.get('src_w') and data.get('src_h'):
@@ -137,20 +160,26 @@ class KVMClient:
                         dy = y - last_y
                         self._last_incoming_abs = (x, y)
                         if dx != 0 or dy != 0:
-                            pyautogui.moveRel(dx, dy, duration=0)
+                            if self.interp_enabled:
+                                self._pending_dx += dx
+                                self._pending_dy += dy
+                            else:
+                                pyautogui.moveRel(dx, dy, duration=0)
                         return
 
-                # Optimierte Mausbewegung, Duplikate vermeiden
-                if self._last_mouse_pos != (x, y):
-                    if _HAS_QUARTZ:
-                        try:
-                            # CGWarpMouseCursorPosition erwartet ein CGPoint (x, y)
-                            Quartz.CGWarpMouseCursorPosition((x, y))
-                        except Exception:
+                # Absolute Modi: direkt oder via Interpolation
+                if self.interp_enabled:
+                    self._target_pos = (x, y)
+                else:
+                    if self._last_mouse_pos != (x, y):
+                        if _HAS_QUARTZ:
+                            try:
+                                Quartz.CGWarpMouseCursorPosition((x, y))
+                            except Exception:
+                                pyautogui.moveTo(x, y, duration=0)
+                        else:
                             pyautogui.moveTo(x, y, duration=0)
-                    else:
-                        pyautogui.moveTo(x, y, duration=0)
-                    self._last_mouse_pos = (x, y)
+                        self._last_mouse_pos = (x, y)
                 
             elif event_type == 'mouse_click':
                 button_map = {
@@ -249,15 +278,86 @@ def main():
     parser.add_argument('server_host', nargs='?', default='localhost', help='Server Host (default: localhost)')
     parser.add_argument('--port', type=int, default=8765, help='Server Port (default: 8765)')
     parser.add_argument('--map', choices=['normalized','preserve','relative'], default='normalized',
-                        help='Mapping-Modus für Mausbewegung (normalized=volle Fläche, preserve=Seitenverhältnis erhalten)')
+                        help='Mapping-Modus: normalized=volle Fläche, preserve=Seitenverhältnis erhalten, relative=Delta-Bewegung')
+    parser.add_argument('--interp', action='store_true', help='Glättung der Mausbewegung aktivieren')
+    parser.add_argument('--interp-rate-hz', type=int, default=240, help='Frequenz der Glättungsschritte (Default: 240 Hz)')
+    parser.add_argument('--interp-step-px', type=int, default=10, help='Maximale Schrittgröße pro Glättungsschritt (Pixel)')
     args = parser.parse_args()
 
-    client = KVMClient(args.server_host, args.port, map_mode=args.map)
+    client = KVMClient(args.server_host, args.port, map_mode=args.map,
+                      interp_enabled=args.interp,
+                      interp_rate_hz=args.interp_rate_hz,
+                      interp_step_px=args.interp_step_px)
 
     try:
         asyncio.run(client.run())
     except KeyboardInterrupt:
         print("\nProgramm beendet.")
+
+    async def _smoothing_loop(self):
+        """Glättet Mausbewegungen durch kleine Schritte bei hoher Frequenz."""
+        try:
+            # Initialisiere letzte bekannte Position
+            try:
+                cx, cy = pyautogui.position()
+            except Exception:
+                cw, ch = pyautogui.size()
+                cx, cy = cw // 2, ch // 2
+            self._last_mouse_pos = (cx, cy)
+
+            step_sleep = max(0.001, 1.0 / float(self.interp_rate_hz))
+            while True:
+                # Relative Modus: verbrauche ausstehende Deltas
+                if self.map_mode == 'relative':
+                    dx = self._pending_dx
+                    dy = self._pending_dy
+                    if dx == 0 and dy == 0:
+                        await asyncio.sleep(step_sleep)
+                    else:
+                        # Begrenze Schrittgröße
+                        step_x = max(-self.interp_step_px, min(self.interp_step_px, dx))
+                        step_y = max(-self.interp_step_px, min(self.interp_step_px, dy))
+                        self._pending_dx -= step_x
+                        self._pending_dy -= step_y
+                        pyautogui.moveRel(step_x, step_y, duration=0)
+                        # last pos ggf. aktualisieren
+                        try:
+                            cx, cy = pyautogui.position()
+                            self._last_mouse_pos = (cx, cy)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(step_sleep)
+                    continue
+
+                # Absolute Modi: bewege dich schrittweise auf Zielposition
+                tx_ty = self._target_pos
+                if not tx_ty:
+                    await asyncio.sleep(step_sleep)
+                    continue
+                tx, ty = tx_ty
+                lx, ly = self._last_mouse_pos if self._last_mouse_pos else (tx, ty)
+                dx = tx - lx
+                dy = ty - ly
+                if dx == 0 and dy == 0:
+                    await asyncio.sleep(step_sleep)
+                    continue
+                # Schritt begrenzen
+                step_x = max(-self.interp_step_px, min(self.interp_step_px, dx))
+                step_y = max(-self.interp_step_px, min(self.interp_step_px, dy))
+                nx = lx + step_x
+                ny = ly + step_y
+                # Setze neue Position
+                if _HAS_QUARTZ:
+                    try:
+                        Quartz.CGWarpMouseCursorPosition((int(nx), int(ny)))
+                    except Exception:
+                        pyautogui.moveTo(int(nx), int(ny), duration=0)
+                else:
+                    pyautogui.moveTo(int(nx), int(ny), duration=0)
+                self._last_mouse_pos = (int(nx), int(ny))
+                await asyncio.sleep(step_sleep)
+        except asyncio.CancelledError:
+            return
 
 if __name__ == "__main__":
     main()

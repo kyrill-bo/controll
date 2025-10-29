@@ -27,7 +27,7 @@ class KVMServer:
         self.loop = None
         
         # Performance-Optimierungen
-        self.last_mouse_time = 0
+        self.last_mouse_time = 0.0  # nutzt perf_counter für präziseres Throttling
         # Standard-Throttle (~2ms ≈ 500 Hz) für sehr flüssige Bewegung
         self.mouse_throttle = 0.002
         
@@ -164,13 +164,12 @@ class KVMServer:
     
     def on_mouse_move(self, x, y):
         """Maus-Bewegung abfangen mit Throttling"""
-        current_time = time.time()
-        
-        # Throttling: Nur senden wenn genug Zeit vergangen ist
-        if current_time - self.last_mouse_time < self.mouse_throttle:
+        now = time.perf_counter()
+        # Throttling: Nur senden wenn genug Zeit vergangen ist (monoton, hochauflösend)
+        if now - self.last_mouse_time < self.mouse_throttle:
             return
-            
-        self.last_mouse_time = current_time
+        self.last_mouse_time = now
+        current_time = time.time()
         
         # Nur im Remote-Capturing senden (ein Gerät aktiv)
         if self.clients and self.capturing:  # Nur senden wenn Clients verbunden und Capturing aktiv ist
