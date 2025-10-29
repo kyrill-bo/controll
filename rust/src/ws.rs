@@ -1,6 +1,8 @@
 use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, connect_async, tungstenite::protocol::Message as WsMsg};
+use serde_json::Value;
+use enigo::{Enigo, MouseControllable};
 
 pub async fn run_ws_server(host: &str, port: u16) -> anyhow::Result<()> {
     let addr = format!("{}:{}", host, port);
@@ -19,17 +21,20 @@ pub async fn run_ws_server(host: &str, port: u16) -> anyhow::Result<()> {
 
 async fn handle_ws_conn(stream: TcpStream) -> anyhow::Result<()> {
     let mut ws = accept_async(stream).await?;
-    ws.send(WsMsg::Text("hello".into())).await.ok();
+    let mut enigo = Enigo::new();
     while let Some(msg) = ws.next().await {
         match msg {
-            Ok(m) => {
-                let is_close = m.is_close();
-                let should_echo = m.is_text() || m.is_binary();
-                if should_echo {
-                    ws.send(m).await.ok();
+            Ok(WsMsg::Text(t)) => {
+                if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                    if v.get("type").and_then(|s| s.as_str()) == Some("mouse_move") {
+                        let x = v.get("x").and_then(|n| n.as_i64()).unwrap_or(0) as i32;
+                        let y = v.get("y").and_then(|n| n.as_i64()).unwrap_or(0) as i32;
+                        enigo.mouse_move_to(x, y);
+                    }
                 }
-                if is_close { break; }
             }
+            Ok(WsMsg::Close(_)) => break,
+            Ok(_) => {}
             Err(e) => { eprintln!("[ws] recv err: {e}"); break; }
         }
     }
