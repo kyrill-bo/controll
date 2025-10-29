@@ -39,7 +39,8 @@ async fn main() {
                     match ev {
                         DiscEvent::ResponseAccepted { host, port } => {
                             let url = format!("ws://{}:{}", host, port);
-                            handle.spawn(async move { let _ = crate::ws::run_ws_client(&url).await; });
+                            crate::state::set_capture(true);
+                            std::thread::spawn(move || { crate::input::run_capture_client(url); });
                         }
                         _ => {}
                     }

@@ -12,6 +12,8 @@ pub fn run_capture_client(url: String) {
                     while let Some(msg) = rx.recv().await {
                         let _ = ws.send(tokio_tungstenite::tungstenite::protocol::Message::Text(msg)).await;
                     }
+                    // WS closed or sender dropped -> stop capture
+                    crate::state::set_capture(false);
                 }
             });
         }
