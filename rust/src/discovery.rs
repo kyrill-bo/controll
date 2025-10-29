@@ -1,6 +1,7 @@
 use crate::protocol::Message;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 const MCAST_GRP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
@@ -15,12 +16,17 @@ pub struct DeviceInfo {
     pub last_seen: Instant,
 }
 
+pub enum DiscEvent {
+    ResponseAccepted { host: String, port: u16 },
+}
+
 pub struct Discovery {
     pub instance_id: String,
     pub name: String,
     pub ws_port: u16,
     pub devices: HashMap<String, DeviceInfo>,
     sock: UdpSocket,
+    event_tx: Option<Sender<DiscEvent>>,
 }
 
 fn primary_ip() -> String {
@@ -36,11 +42,15 @@ fn primary_ip() -> String {
 
 impl Discovery {
     pub fn new(instance_id: String, name: String, ws_port: u16) -> std::io::Result<Self> {
+        Self::new_with_sender(instance_id, name, ws_port, None)
+    }
+
+    pub fn new_with_sender(instance_id: String, name: String, ws_port: u16, event_tx: Option<Sender<DiscEvent>>) -> std::io::Result<Self> {
         let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MCAST_PORT))?;
         sock.set_read_timeout(Some(Duration::from_millis(500)))?;
         sock.join_multicast_v4(&MCAST_GRP, &Ipv4Addr::UNSPECIFIED)?;
         sock.set_multicast_loop_v4(true)?;
-        Ok(Self { instance_id, name, ws_port, devices: HashMap::new(), sock })
+        Ok(Self { instance_id, name, ws_port, devices: HashMap::new(), sock, event_tx })
     }
 
     fn send_unicast(&self, target_ip: &str, msg: &Message) {
@@ -71,7 +81,7 @@ impl Discovery {
         self.prune();
 
         let mut buf = [0u8; 2048];
-        if let Ok((n, _src)) = self.sock.recv_from(&mut buf) {
+        if let Ok((n, src)) = self.sock.recv_from(&mut buf) {
             if let Ok(text) = std::str::from_utf8(&buf[..n]) {
                 if let Ok(msg) = serde_json::from_str::<Message>(text) {
                     match msg {
@@ -81,7 +91,7 @@ impl Discovery {
                                 println!("[disc] seen {} @ {}:{}", instance_id, ip, ws_port);
                             }
                         }
-                        Message::REQUEST_CONTROL { from, to, name, ws_host, ws_port, options: _ } => {
+                        Message::REQUEST_CONTROL { from, to, name, ws_host, ws_port: _, options: _ } => {
                             if to.as_deref().map(|t| t == self.instance_id).unwrap_or(true) {
                                 println!("[disc] request from {} ({})", name, from);
                                 let resp = Message::RESPONSE_CONTROL { from: self.instance_id.clone(), accepted: true };
@@ -91,6 +101,11 @@ impl Discovery {
                         }
                         Message::RESPONSE_CONTROL { from, accepted } => {
                             println!("[disc] response from {} accepted={}", from, accepted);
+                            if accepted {
+                                let host = match src { std::net::SocketAddr::V4(v4) => v4.ip().to_string(), _ => "127.0.0.1".to_string() };
+                                let port = self.devices.get(&from).map(|d| d.ws_port).unwrap_or(self.ws_port);
+                                if let Some(tx) = &self.event_tx { let _ = tx.send(DiscEvent::ResponseAccepted { host, port }); }
+                            }
                         }
                     }
                 }
@@ -105,8 +120,12 @@ impl Discovery {
     }
 }
 
-pub fn run_loop(inst: String, name: String, ws_port: u16) -> std::io::Result<()> {
-    let mut disc = Discovery::new(inst, name, ws_port)?;
+pub fn run_loop_with_sender(inst: String, name: String, ws_port: u16, event_tx: Option<Sender<DiscEvent>>) -> std::io::Result<()> {
+    let mut disc = Discovery::new_with_sender(inst, name, ws_port, event_tx)?;
     let mut last_beacon = Instant::now() - BEACON_INTERVAL;
     loop { disc.tick(&mut last_beacon); }
+}
+
+pub fn run_loop(inst: String, name: String, ws_port: u16) -> std::io::Result<()> {
+    run_loop_with_sender(inst, name, ws_port, None)
 }

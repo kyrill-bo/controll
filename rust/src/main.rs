@@ -2,7 +2,7 @@ mod protocol;
 mod discovery;
 mod ws;
 
-use discovery::{run_loop, Discovery};
+use discovery::{run_loop, run_loop_with_sender, Discovery, DiscEvent};
 use serde_json::json;
 use std::env;
 use uuid::Uuid;
@@ -20,7 +20,28 @@ async fn main() {
             let ws_port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8765);
             let inst = Uuid::new_v4().to_string();
             let name = hostname();
-            if let Err(e) = run_loop(inst, name, ws_port) { eprintln!("error: {e}"); }
+            // start WS server
+            tokio::spawn(ws::run_ws_server("0.0.0.0", ws_port));
+            // channel for discovery events
+            let (tx, rx) = std::sync::mpsc::channel::<DiscEvent>();
+            // spawn discovery loop in a thread
+            let inst2 = inst.clone();
+            let name2 = name.clone();
+            std::thread::spawn(move || { let _ = run_loop_with_sender(inst2, name2, ws_port, Some(tx)); });
+            // forward accepted responses into WS client connects
+            let handle = tokio::runtime::Handle::current();
+            std::thread::spawn(move || {
+                while let Ok(ev) = rx.recv() {
+                    match ev {
+                        DiscEvent::ResponseAccepted { host, port } => {
+                            let url = format!("ws://{}:{}", host, port);
+                            handle.spawn(async move { let _ = crate::ws::run_ws_client(&url).await; });
+                        }
+                    }
+                }
+            });
+            // keep process alive
+            futures::future::pending::<()>().await;
         }
         "list" => {
             let ws_port: u16 = 8765;
