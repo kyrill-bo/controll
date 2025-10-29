@@ -17,7 +17,7 @@ from pynput import keyboard
 
 class KVMClient:
     def __init__(self, server_host='localhost', server_port=8765, map_mode='normalized',
-                 interp_enabled=False, interp_rate_hz=240, interp_step_px=10):
+                 interp_enabled=False, interp_rate_hz=240, interp_step_px=10, deadzone_px=1):
         self.server_host = server_host
         self.server_port = server_port
         self.uri = f"ws://{server_host}:{server_port}"
@@ -26,6 +26,7 @@ class KVMClient:
         self.interp_enabled = interp_enabled
         self.interp_rate_hz = max(30, int(interp_rate_hz))  # sanity bounds
         self.interp_step_px = max(1, int(interp_step_px))
+        self.deadzone_px = max(0, int(deadzone_px))
         
         # PyAutoGUI Einstellungen für maximale Performance
         pyautogui.FAILSAFE = False  # Deaktiviert Fail-Safe
@@ -111,6 +112,9 @@ class KVMClient:
                             dx = int((x_norm - last_xn) * max(1, cw-1))
                             dy = int((y_norm - last_yn) * max(1, ch-1))
                             self._last_incoming_norm = (x_norm, y_norm)
+                            # Deadzone-Filter gegen Mikro-Jitter
+                            if abs(dx) < self.deadzone_px and abs(dy) < self.deadzone_px:
+                                return
                             if dx != 0 or dy != 0:
                                 if self.interp_enabled:
                                     self._pending_dx += dx
@@ -159,6 +163,9 @@ class KVMClient:
                         dx = x - last_x
                         dy = y - last_y
                         self._last_incoming_abs = (x, y)
+                        # Deadzone-Filter gegen Mikro-Jitter
+                        if abs(dx) < self.deadzone_px and abs(dy) < self.deadzone_px:
+                            return
                         if dx != 0 or dy != 0:
                             if self.interp_enabled:
                                 self._pending_dx += dx
@@ -171,7 +178,11 @@ class KVMClient:
                 if self.interp_enabled:
                     self._target_pos = (x, y)
                 else:
-                    if self._last_mouse_pos != (x, y):
+                    # Bei direkter Bewegung: nur bewegen, wenn außerhalb der Deadzone
+                    if self._last_mouse_pos is None or (
+                        abs((self._last_mouse_pos[0] - x)) >= self.deadzone_px or
+                        abs((self._last_mouse_pos[1] - y)) >= self.deadzone_px
+                    ):
                         if _HAS_QUARTZ:
                             try:
                                 Quartz.CGWarpMouseCursorPosition((x, y))
@@ -259,43 +270,8 @@ class KVMClient:
         except Exception as e:
             print(f"Fehler beim Simulieren der Taste '{key_data}': {e}")
     
-    async def run(self):
-        """Client dauerhaft laufen lassen mit Reconnect"""
-        while True:
-            try:
-                await self.connect_to_server()
-            except KeyboardInterrupt:
-                print("\nClient wird beendet...")
-                break
-            
-            if not self.connected:
-                print("Versuche Reconnect in 5 Sekunden...")
-                await asyncio.sleep(5)
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description='KVM Client - Remote Event Simulator')
-    parser.add_argument('server_host', nargs='?', default='localhost', help='Server Host (default: localhost)')
-    parser.add_argument('--port', type=int, default=8765, help='Server Port (default: 8765)')
-    parser.add_argument('--map', choices=['normalized','preserve','relative'], default='normalized',
-                        help='Mapping-Modus: normalized=volle Fläche, preserve=Seitenverhältnis erhalten, relative=Delta-Bewegung')
-    parser.add_argument('--interp', action='store_true', help='Glättung der Mausbewegung aktivieren')
-    parser.add_argument('--interp-rate-hz', type=int, default=240, help='Frequenz der Glättungsschritte (Default: 240 Hz)')
-    parser.add_argument('--interp-step-px', type=int, default=10, help='Maximale Schrittgröße pro Glättungsschritt (Pixel)')
-    args = parser.parse_args()
-
-    client = KVMClient(args.server_host, args.port, map_mode=args.map,
-                      interp_enabled=args.interp,
-                      interp_rate_hz=args.interp_rate_hz,
-                      interp_step_px=args.interp_step_px)
-
-    try:
-        asyncio.run(client.run())
-    except KeyboardInterrupt:
-        print("\nProgramm beendet.")
-
     async def _smoothing_loop(self):
-        """Glättet Mausbewegungen durch kleine Schritte bei hoher Frequenz."""
+        """Glättet Mausbewegungen durch kleine Schritte bei hoher Frequenz mit Deadzone und leichtem Easing."""
         try:
             # Initialisiere letzte bekannte Position
             try:
@@ -311,7 +287,12 @@ def main():
                 if self.map_mode == 'relative':
                     dx = self._pending_dx
                     dy = self._pending_dy
-                    if dx == 0 and dy == 0:
+                    # Deadzone: verwerfe Mikro-Jitter
+                    if abs(dx) < self.deadzone_px and abs(dy) < self.deadzone_px:
+                        self._pending_dx = 0
+                        self._pending_dy = 0
+                        await asyncio.sleep(step_sleep)
+                    elif dx == 0 and dy == 0:
                         await asyncio.sleep(step_sleep)
                     else:
                         # Begrenze Schrittgröße
@@ -338,12 +319,27 @@ def main():
                 lx, ly = self._last_mouse_pos if self._last_mouse_pos else (tx, ty)
                 dx = tx - lx
                 dy = ty - ly
-                if dx == 0 and dy == 0:
+                # Deadzone: wenn nahe am Ziel, schnapp auf Ziel und warte
+                if abs(dx) <= self.deadzone_px and abs(dy) <= self.deadzone_px:
+                    if _HAS_QUARTZ:
+                        try:
+                            Quartz.CGWarpMouseCursorPosition((int(tx), int(ty)))
+                        except Exception:
+                            pyautogui.moveTo(int(tx), int(ty), duration=0)
+                    else:
+                        pyautogui.moveTo(int(tx), int(ty), duration=0)
+                    self._last_mouse_pos = (int(tx), int(ty))
                     await asyncio.sleep(step_sleep)
                     continue
-                # Schritt begrenzen
-                step_x = max(-self.interp_step_px, min(self.interp_step_px, dx))
-                step_y = max(-self.interp_step_px, min(self.interp_step_px, dy))
+                # Easing: Schritt proportional zur verbleibenden Strecke, gekappt
+                def _ease_component(delta: int) -> int:
+                    mag = abs(delta)
+                    # 40% der Reststrecke, mind. 1px, max. interp_step_px
+                    step = max(1, min(self.interp_step_px, int(mag * 0.4)))
+                    return step if delta > 0 else -step
+
+                step_x = _ease_component(dx)
+                step_y = _ease_component(dy)
                 nx = lx + step_x
                 ny = ly + step_y
                 # Setze neue Position
@@ -358,6 +354,45 @@ def main():
                 await asyncio.sleep(step_sleep)
         except asyncio.CancelledError:
             return
+    
+    async def run(self):
+        """Client dauerhaft laufen lassen mit Reconnect"""
+        while True:
+            try:
+                await self.connect_to_server()
+            except KeyboardInterrupt:
+                print("\nClient wird beendet...")
+                break
+            
+            if not self.connected:
+                print("Versuche Reconnect in 5 Sekunden...")
+                await asyncio.sleep(5)
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='KVM Client - Remote Event Simulator')
+    parser.add_argument('server_host', nargs='?', default='localhost', help='Server Host (default: localhost)')
+    parser.add_argument('--port', type=int, default=8765, help='Server Port (default: 8765)')
+    parser.add_argument('--map', choices=['normalized','preserve','relative'], default='normalized',
+                        help='Mapping-Modus: normalized=volle Fläche, preserve=Seitenverhältnis erhalten, relative=Delta-Bewegung')
+    parser.add_argument('--interp', action='store_true', help='Glättung der Mausbewegung aktivieren')
+    parser.add_argument('--interp-rate-hz', type=int, default=240, help='Frequenz der Glättungsschritte (Default: 240 Hz)')
+    parser.add_argument('--interp-step-px', type=int, default=10, help='Maximale Schrittgröße pro Glättungsschritt (Pixel)')
+    parser.add_argument('--deadzone-px', type=int, default=1, help='Deadzone in Pixel zur Jitter-Filterung')
+    args = parser.parse_args()
+
+    client = KVMClient(args.server_host, args.port, map_mode=args.map,
+                      interp_enabled=args.interp,
+                      interp_rate_hz=args.interp_rate_hz,
+                      interp_step_px=args.interp_step_px,
+                      deadzone_px=args.deadzone_px)
+
+    try:
+        asyncio.run(client.run())
+    except KeyboardInterrupt:
+        print("\nProgramm beendet.")
+
+    
 
 if __name__ == "__main__":
     main()

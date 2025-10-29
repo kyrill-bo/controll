@@ -8,11 +8,12 @@ MAP_MODE=${MAP:-relative}
 INTERP=${INTERP:-1}
 INTERP_RATE=${INTERP_RATE:-240}
 INTERP_STEP=${INTERP_STEP:-10}
+DEADZONE_PX=${DEADZONE_PX:-1}
 
 echo "🖥️  KVM Client wird gestartet..."
 echo "Verbinde zu Server: $SERVER_IP"
 echo "Maus-Mapping: $MAP_MODE"
-echo "Interpolation: ${INTERP} (Rate=${INTERP_RATE}Hz, Step=${INTERP_STEP}px)"
+echo "Interpolation: ${INTERP} (Rate=${INTERP_RATE}Hz, Step=${INTERP_STEP}px, Deadzone=${DEADZONE_PX}px)"
 echo "Zum Beenden: Ctrl+C"
 echo ""
 
@@ -20,9 +21,11 @@ echo ""
 if [ -f ".venv/bin/python" ]; then
     ./.venv/bin/python client.py "$SERVER_IP" --map "$MAP_MODE" \
         $( [ "$INTERP" = "1" ] && echo "--interp" ) \
-        --interp-rate-hz "$INTERP_RATE" --interp-step-px "$INTERP_STEP"
+        --interp-rate-hz "$INTERP_RATE" --interp-step-px "$INTERP_STEP" \
+        --deadzone-px "$DEADZONE_PX"
 else
     python3 client.py "$SERVER_IP" --map "$MAP_MODE" \
         $( [ "$INTERP" = "1" ] && echo "--interp" ) \
-        --interp-rate-hz "$INTERP_RATE" --interp-step-px "$INTERP_STEP"
+        --interp-rate-hz "$INTERP_RATE" --interp-step-px "$INTERP_STEP" \
+        --deadzone-px "$DEADZONE_PX"
 fi
