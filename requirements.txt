@@ -2,3 +2,4 @@
 websockets>=11.0
 pyautogui>=0.9.54
 pynput>=1.7.6
+PySide6>=6.7
