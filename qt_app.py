@@ -111,9 +111,15 @@ class Discovery(threading.Thread):
         data = json.dumps(payload).encode('utf-8')
         try:
             self.sock.sendto(data, (target_ip, MCAST_PORT))
-            print(f'[Discovery] unicast {len(data)} bytes to {target_ip}:{MCAST_PORT}')
+            try:
+                self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast {len(data)} bytes to {target_ip}:{MCAST_PORT}')
+            except Exception:
+                pass
         except Exception as e:
-            print(f'[Discovery] unicast error to {target_ip}: {e}')
+            try:
+                self.window.write_event_value('-LOG_EVENT-', f'[Discovery] unicast error to {target_ip}: {e}')
+            except Exception:
+                pass
 
     def _broadcast(self, payload: dict):
         data = json.dumps(payload).encode('utf-8')
@@ -173,6 +179,7 @@ class Discovery(threading.Thread):
             to = msg.get('to')
             if to and to != self.instance_id:
                 return
+            self.window.write_event_value('-LOG_EVENT-', f"[Discovery] REQUEST from {addr} name={msg.get('name')} to={msg.get('to')}")
             self.window.write_event_value('-REQUEST_RECEIVED-', (msg, addr))
         elif mtype == 'RESPONSE_CONTROL':
             self.window.write_event_value('-RESPONSE_RECEIVED-', (msg, addr))
@@ -263,8 +270,9 @@ class App:
             return False
         elif event == '-DEVICES_CHANGED-':
             devices = values[event]
-            self.window['-DEVICES-'].update([f"{info['name']}  {info['ip']}:{info['ws_port']}  [{inst[:8]}]" for inst, info in sorted(devices.items(), key=lambda kv: kv[1]['name'])],
-                                           set_to_index=0 if devices else None)
+            items = [f"{info['name']}  {info['ip']}:{info['ws_port']}  [{inst[:8]}]" for inst, info in sorted(devices.items(), key=lambda kv: kv[1]['name'])]
+            self.devices_map = {item: (info['ip'], inst) for (inst, info), item in zip(sorted(devices.items(), key=lambda kv: kv[1]['name']), items)}
+            self.window['-DEVICES-'].update(items, set_to_index=0 if devices else None)
         elif event == '-REQUEST_RECEIVED-':
             req, addr = values[event]
             name = req.get('name', addr)
@@ -286,17 +294,20 @@ class App:
                 self._set_status('Please select a device')
                 return True
             selected_device_str = values['-DEVICES-'][0]
-            try:
-                ip = selected_device_str.split('  ')[1].split(':')[0]
-                inst = selected_device_str.split('[')[1].split(']')[0]
+            ip, inst = self.devices_map.get(selected_device_str, (None, None))
+            if not ip:
                 try:
-                    self.window['-LOG-'].update(f'Requesting control from {ip} [{inst}]\n', append=True)
+                    ip = selected_device_str.split('  ')[1].split(':')[0]
                 except Exception:
-                    pass
-                self.discovery.send_request(ip, self.current_options(values), to=None)
-                self._set_status('Request sent - waiting for confirmation...' )
-            except IndexError:
-                self._set_status('Could not parse device info.')
+                    self._set_status('Could not parse device info.')
+                    return True
+            try:
+                self.window['-LOG-'].update(f'Requesting control from {ip}\n', append=True)
+            except Exception:
+                pass
+            self.start_server()
+            self.discovery.send_request(ip, self.current_options(values), to=None)
+            self._set_status('Request sent - waiting for confirmation...' )
 
 
         elif event == '-MANUAL-':
@@ -306,6 +317,7 @@ class App:
                     self.window['-LOG-'].update(f'Requesting control from {host}\n', append=True)
                 except Exception:
                     pass
+                self.start_server()
                 self.discovery.send_request(host, self.current_options(values), to=None)
                 self._set_status('Request sent - waiting for confirmation...')
 
