@@ -53,12 +53,16 @@ let serverStarted = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 520,
+    width: 900,
+    height: 650,
+    resizable: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
     },
-    title: 'KVM Control'
+    title: 'KVM Control',
+    backgroundColor: '#1e1e1e'
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
@@ -192,8 +196,21 @@ function startServer(options) {
   const args = [serverPath, '--host', '0.0.0.0', '--port', String(wsPort), '--hotkey', options.hotkey || 'f13', '--start-capturing'];
   if (options.noTxMouse) args.push('--no-tx-mouse');
   if (options.noTxKeyboard) args.push('--no-tx-keyboard');
-  serverProc = spawn(python, args, { stdio: 'ignore' });
-  serverProc.on('exit', () => { serverStarted = false; serverProc = null; sendStatusToUi('Server beendet'); });
+  
+  console.log('Starting server:', python, args.join(' '));
+  serverProc = spawn(python, args, { 
+    cwd: path.dirname(__dirname),
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  
+  serverProc.stdout.on('data', (data) => console.log('[Server]', data.toString()));
+  serverProc.stderr.on('data', (data) => console.error('[Server]', data.toString()));
+  serverProc.on('exit', (code) => { 
+    console.log('Server exited with code', code);
+    serverStarted = false; 
+    serverProc = null; 
+    sendStatusToUi(code === 0 ? 'Server beendet' : `Server Fehler (${code})`); 
+  });
   sendStatusToUi(`Server gestartet auf Port ${wsPort}`);
 }
 
@@ -207,8 +224,20 @@ function startClient(host, port, options) {
   const clientPath = path.join(path.dirname(__dirname), 'client.py');
   const args = [clientPath, host, '--port', String(port || 8765), '--map', options.map || 'relative', '--interp-rate-hz', String(options.interp_rate_hz || 240), '--interp-step-px', String(options.interp_step_px || 10), '--deadzone-px', String(options.deadzone_px || 1), '--speed', String(options.speed || 1.0)];
   if (options.interp) args.splice(5, 0, '--interp');
-  clientProc = spawn(python, args, { stdio: 'ignore' });
-  clientProc.on('exit', () => { clientProc = null; sendStatusToUi('Client getrennt'); });
+  
+  console.log('Starting client:', python, args.join(' '));
+  clientProc = spawn(python, args, { 
+    cwd: path.dirname(__dirname),
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  
+  clientProc.stdout.on('data', (data) => console.log('[Client]', data.toString()));
+  clientProc.stderr.on('data', (data) => console.error('[Client]', data.toString()));
+  clientProc.on('exit', (code) => { 
+    console.log('Client exited with code', code);
+    clientProc = null; 
+    sendStatusToUi(code === 0 ? 'Client getrennt' : `Client Fehler (${code})`); 
+  });
 }
 
 function stopClient() {

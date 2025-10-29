@@ -5,87 +5,334 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
     <title>KVM Control</title>
     <style>
-      body { font-family: -apple-system, system-ui, sans-serif; margin: 0; }
-      header { padding: 12px; background: #111; color: #fff; }
-      main { padding: 12px; }
-      .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-      .devices { height: 260px; overflow: auto; border: 1px solid #ccc; border-radius: 6px; }
-      .device { padding: 8px; cursor: pointer; display:flex; justify-content:space-between; border-bottom: 1px solid #eee; }
-      .device:hover { background: #f7f7f7; }
-      .status { margin-top: 8px; color: #333; }
-      label { display: inline-flex; align-items:center; gap: 6px; }
-      input[type="number"] { width: 70px; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { 
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; 
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: #333;
+        overflow: hidden;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      
+      .header {
+        background: rgba(255,255,255,0.95);
+        padding: 20px 30px;
+        box-shadow: 0 2px 20px rgba(0,0,0,0.1);
+      }
+      
+      .header h1 {
+        font-size: 24px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+      
+      .container {
+        flex: 1;
+        padding: 30px;
+        overflow-y: auto;
+      }
+      
+      .card {
+        background: rgba(255,255,255,0.95);
+        border-radius: 16px;
+        padding: 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+      }
+      
+      .card h2 {
+        font-size: 18px;
+        margin-bottom: 16px;
+        color: #667eea;
+        font-weight: 600;
+      }
+      
+      .setup-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      
+      .control-buttons {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      
+      button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+      }
+      
+      button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+      }
+      
+      button:active {
+        transform: translateY(0);
+      }
+      
+      button.secondary {
+        background: #6c757d;
+        box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
+      }
+      
+      button.danger {
+        background: #dc3545;
+        box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+      }
+      
+      .devices-list {
+        max-height: 200px;
+        overflow-y: auto;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        margin-bottom: 16px;
+      }
+      
+      .device-item {
+        padding: 14px 16px;
+        cursor: pointer;
+        border-bottom: 1px solid #e9ecef;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        transition: all 0.15s;
+      }
+      
+      .device-item:last-child {
+        border-bottom: none;
+      }
+      
+      .device-item:hover {
+        background: #f8f9fa;
+      }
+      
+      .device-item.selected {
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+        border-left: 4px solid #667eea;
+      }
+      
+      .device-name {
+        font-weight: 600;
+        color: #333;
+      }
+      
+      .device-info {
+        font-size: 13px;
+        color: #6c757d;
+      }
+      
+      .settings-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      
+      .form-group label {
+        font-size: 13px;
+        font-weight: 500;
+        color: #495057;
+      }
+      
+      select, input[type="number"] {
+        padding: 8px 12px;
+        border: 2px solid #e9ecef;
+        border-radius: 6px;
+        font-size: 14px;
+        transition: border-color 0.2s;
+      }
+      
+      select:focus, input[type="number"]:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+      
+      .checkbox-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      
+      .checkbox-group input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+      }
+      
+      .status-bar {
+        background: rgba(255,255,255,0.95);
+        padding: 14px 30px;
+        font-size: 14px;
+        color: #495057;
+        border-top: 1px solid rgba(0,0,0,0.1);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #28a745;
+        animation: pulse 2s infinite;
+      }
+      
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      
+      .empty-state {
+        text-align: center;
+        padding: 40px;
+        color: #6c757d;
+      }
+      
+      .python-path {
+        font-family: 'Monaco', 'Courier New', monospace;
+        font-size: 12px;
+        color: #667eea;
+        padding: 8px 12px;
+        background: #f8f9fa;
+        border-radius: 6px;
+        word-break: break-all;
+      }
     </style>
   </head>
   <body>
-    <header>
-      <h3>KVM Control</h3>
-    </header>
-    <main>
-      <div class="row" style="border:1px solid #ddd; padding:8px; border-radius:6px;">
-        <strong>Setup</strong>
-        <span id="lblPython">Python: (unbekannt)</span>
-        <button id="btnChoosePy">Python wählen…</button>
-        <button id="btnInstallDeps">Abhängigkeiten installieren</button>
-        <label>WS Port <input id="numPort" type="number" min="1" max="65535" value="8765"></label>
-        <button id="btnApplyPort">Übernehmen</button>
-        <button id="btnOpenAcc">Zugriffshilfen öffnen</button>
-        <button id="btnOpenInput">Eingabeüberwachung öffnen</button>
+    <div class="header">
+      <h1>🖱️ KVM Control</h1>
+    </div>
+    
+    <div class="container">
+      <!-- Setup Section -->
+      <div class="card">
+        <h2>⚙️ Setup</h2>
+        <div class="setup-grid">
+          <div>
+            <div class="python-path" id="lblPython">Python: Lädt...</div>
+          </div>
+          <div class="control-buttons">
+            <button id="btnChoosePy" class="secondary">Python wählen</button>
+            <button id="btnInstallDeps">Dependencies installieren</button>
+          </div>
+        </div>
+        <div class="setup-grid">
+          <div class="form-group">
+            <label>WebSocket Port</label>
+            <input id="numPort" type="number" min="1" max="65535" value="8765">
+          </div>
+          <div class="control-buttons">
+            <button id="btnApplyPort" class="secondary">Port übernehmen</button>
+            <button id="btnOpenAcc" class="secondary">Zugriffshilfen</button>
+            <button id="btnOpenInput" class="secondary">Eingabeüberwachung</button>
+          </div>
+        </div>
       </div>
-      <div class="row">
-        <button id="btnRequest">Steuerung anfordern</button>
-        <button id="btnDisconnect">Trennen</button>
-        <button id="btnManual">Manuell verbinden…</button>
-        <button id="btnStartServer">Server starten</button>
-        <button id="btnStopServer">Server stoppen</button>
+
+      <!-- Connection Section -->
+      <div class="card">
+        <h2>🌐 Verfügbare Geräte</h2>
+        <div class="devices-list" id="devices">
+          <div class="empty-state">Suche nach Geräten im Netzwerk...</div>
+        </div>
+        <div class="control-buttons">
+          <button id="btnRequest">Steuerung anfordern</button>
+          <button id="btnManual" class="secondary">Manuell verbinden</button>
+          <button id="btnDisconnect" class="danger">Trennen</button>
+        </div>
       </div>
-      <div class="row">
-        <div>
-          <label>Mapping
+
+      <!-- Settings Section -->
+      <div class="card">
+        <h2>🎛️ Einstellungen</h2>
+        <div class="settings-grid">
+          <div class="form-group">
+            <label>Mapping</label>
             <select id="selMap">
-              <option value="relative">relative</option>
-              <option value="normalized">normalized</option>
-              <option value="preserve">preserve</option>
+              <option value="relative">Relative</option>
+              <option value="normalized">Normalized</option>
+              <option value="preserve">Preserve</option>
             </select>
-          </label>
-        </div>
-        <div>
-          <label><input type="checkbox" id="chkInterp" checked> Interpolation</label>
-        </div>
-        <div>
-          <label>Rate (Hz) <input id="numRate" type="number" value="240" min="30" max="1000"></label>
-        </div>
-        <div>
-          <label>Schritt (px) <input id="numStep" type="number" value="10" min="1" max="200"></label>
-        </div>
-        <div>
-          <label>Deadzone (px) <input id="numDead" type="number" value="1" min="0" max="20"></label>
-        </div>
-        <div>
-          <label>Speed × <input id="numSpeed" type="number" value="1.0" step="0.1" min="0.1" max="5"></label>
-        </div>
-        <div>
-          <label>Hotkey
+          </div>
+          
+          <div class="form-group">
+            <label>Hotkey</label>
             <select id="selHotkey">
               <option value="f13">F13</option>
               <option value="f12">F12</option>
               <option value="f11">F11</option>
               <option value="f14">F14</option>
             </select>
-          </label>
-        </div>
-        <div>
-          <label><input type="checkbox" id="chkTxMouse" checked> Maus senden</label>
-        </div>
-        <div>
-          <label><input type="checkbox" id="chkTxKeyboard" checked> Tastatur senden</label>
+          </div>
+          
+          <div class="checkbox-group">
+            <input type="checkbox" id="chkInterp" checked>
+            <label for="chkInterp">Interpolation</label>
+          </div>
+          
+          <div class="form-group">
+            <label>Rate (Hz)</label>
+            <input id="numRate" type="number" value="240" min="30" max="1000">
+          </div>
+          
+          <div class="form-group">
+            <label>Schritt (px)</label>
+            <input id="numStep" type="number" value="10" min="1" max="200">
+          </div>
+          
+          <div class="form-group">
+            <label>Deadzone (px)</label>
+            <input id="numDead" type="number" value="1" min="0" max="20">
+          </div>
+          
+          <div class="form-group">
+            <label>Speed Multiplier</label>
+            <input id="numSpeed" type="number" value="1.0" step="0.1" min="0.1" max="5">
+          </div>
+          
+          <div class="checkbox-group">
+            <input type="checkbox" id="chkTxMouse" checked>
+            <label for="chkTxMouse">Maus senden</label>
+          </div>
+          
+          <div class="checkbox-group">
+            <input type="checkbox" id="chkTxKeyboard" checked>
+            <label for="chkTxKeyboard">Tastatur senden</label>
+          </div>
         </div>
       </div>
+    </div>
 
-      <div class="devices" id="devices"></div>
+    <div class="status-bar">
+      <div class="status-indicator"></div>
+      <span id="status">Bereit</span>
+    </div>
 
-      <div class="status" id="status">Bereit</div>
-    </main>
     <script src="renderer.js"></script>
   </body>
 </html>

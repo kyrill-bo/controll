@@ -1,15 +1,82 @@
-To install the `_tkinter` module for Python 3.14 on macOS, you typically need to install `tcl-tk` via Homebrew.
+# KVM Control - Tastatur/Maus über Netzwerk teilen
+
+Moderne Electron-Anwendung zum Teilen von Tastatur und Maus zwischen macOS-Rechnern über das lokale Netzwerk.
+
+## Features
+
+- 🎯 Einfache GUI mit automatischer Geräteerkennung
+- 🔒 Anfrage/Genehmigung-System für sicheren Zugriff
+- ⚡ Interpolation und Smoothing für flüssige Maussteuerung
+- 🎮 Konfigurierbare Hotkeys, Geschwindigkeit und Mapping
+- 🌐 Manuelle Verbindung als Fallback
+
+## Installation
+
+### Voraussetzungen
+
+- macOS 11+
+- Node.js 18+
+- Python 3.10+
+
+### Setup
 
 ```bash
-brew install tcl-tk
-brew reinstall python@3.14
+# Repository klonen
+git clone https://github.com/kyrill-bo/controll.git
+cd controll
+
+# Python-Abhängigkeiten installieren
+pip3 install -r requirements.txt
+
+# Electron starten
+cd electron
+npm install
+npm start
 ```
 
-This will install the necessary Tcl/Tk libraries and then re-install Python 3.14, ensuring it links correctly with the newly installed Tkinter dependencies.
+## Benutzung
 
-# KVM Over Network - Tastatur/Maus über Netzwerk teilen
+1. **Electron App starten** auf beiden Rechnern
+2. **Setup durchführen**:
+   - Python-Interpreter auswählen (falls nötig)
+   - "Installieren" klicken für Abhängigkeiten
+   - Bedienungshilfen & Eingabeüberwachung in macOS freigeben
+3. **Gerät auswählen** aus der Liste (Doppelklick zum Verbinden)
+4. **Anfrage genehmigen** auf dem Zielrechner
+5. **F13 drücken** zum Umschalten zwischen lokal/remote
 
-Dieses System ermöglicht es, Tastatur und Maus zwischen zwei Laptops über das Netzwerk zu teilen.
+## macOS Berechtigungen
+
+Die App benötigt:
+- **Bedienungshilfen** (Accessibility) - für Eingabesteuerung
+- **Eingabeüberwachung** (Input Monitoring) - für Hotkey-Erkennung
+
+Öffne diese direkt aus der App mit den entsprechenden Buttons.
+
+## Technische Details
+
+- **Server** (Python): Fängt lokale Eingaben ab und überträgt sie
+- **Client** (Python): Empfängt und simuliert Eingaben
+- **GUI** (Electron): Verwaltung, Discovery und Einstellungen
+- **Protokoll**: WebSocket für Eingaben, UDP Multicast für Discovery
+
+## Projektstruktur
+
+```
+controll/
+├── electron/          # Electron GUI
+│   ├── main.js       # Hauptprozess
+│   ├── preload.js    # IPC Bridge
+│   └── renderer/     # UI
+├── server.py         # Input-Capture Backend
+├── client.py         # Input-Injection Backend
+└── requirements.txt  # Python-Abhängigkeiten
+```
+
+## Lizenz
+
+MIT
+
 
 ## Funktionsweise
 

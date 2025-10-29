@@ -1,125 +1,139 @@
 const $ = (sel) => document.querySelector(sel);
-const devicesEl = $('#devices');
-const statusEl = $('#status');
 
 let devices = [];
-let selected = null;
+let selectedIndex = null;
 
+// Elements
+const devicesList = $('#devicesList');
+const statusBar = $('#statusBar');
+const pythonPath = $('#pythonPath');
+const inputPort = $('#inputPort');
+
+// Render devices
 function renderDevices() {
-  devicesEl.innerHTML = '';
-  devices.forEach((d, i) => {
-    const row = document.createElement('div');
-    row.className = 'device';
-    row.dataset.index = i;
-    const left = document.createElement('div');
-    left.textContent = `${d.name}`;
-    const right = document.createElement('div');
-    right.textContent = `${d.ip}:${d.ws_port}`;
-    row.appendChild(left); row.appendChild(right);
-    row.onclick = () => {
-      selected = i;
-      for (const el of devicesEl.querySelectorAll('.device')) el.style.background = '';
-      row.style.background = '#daf0ff';
-    };
-    row.ondblclick = () => doRequest();
-    devicesEl.appendChild(row);
+  if (!devices.length) {
+    devicesList.innerHTML = '<div style="text-align: center; padding: 20px; opacity: 0.5;">Keine Geräte gefunden</div>';
+    return;
+  }
+  devicesList.innerHTML = devices.map((d, i) => `
+    <div class="device-item ${i === selectedIndex ? 'selected' : ''}" data-index="${i}">
+      <div class="device-name">${d.name}</div>
+      <div class="device-ip">${d.ip}:${d.ws_port}</div>
+    </div>
+  `).join('');
+  
+  devicesList.querySelectorAll('.device-item').forEach((el, i) => {
+    el.onclick = () => { selectedIndex = i; renderDevices(); };
+    el.ondblclick = () => requestControl();
   });
 }
 
+// Get options from UI
 function getOptions() {
   return {
     map: $('#selMap').value,
     interp: $('#chkInterp').checked,
-    interp_rate_hz: parseInt($('#numRate').value, 10) || 240,
-    interp_step_px: parseInt($('#numStep').value, 10) || 10,
-    deadzone_px: parseInt($('#numDead').value, 10) || 1,
+    interp_rate_hz: 240,
+    interp_step_px: 10,
+    deadzone_px: 1,
     speed: parseFloat($('#numSpeed').value) || 1.0,
     hotkey: $('#selHotkey').value,
-    txMouse: $('#chkTxMouse').checked,
-    txKeyboard: $('#chkTxKeyboard').checked
+    txMouse: true,
+    txKeyboard: true
   };
 }
 
-function doRequest() {
-  if (selected == null) {
-    alert('Bitte ein Gerät auswählen.');
+// Request control
+async function requestControl() {
+  if (selectedIndex === null) {
+    statusBar.textContent = '⚠️ Bitte ein Gerät auswählen';
+    statusBar.className = 'status-bar status-error';
     return;
   }
-  const d = devices[selected];
+  const device = devices[selectedIndex];
   const opts = getOptions();
-  // Ensure server running
-  window.kvm.startServer({ hotkey: opts.hotkey, noTxMouse: !opts.txMouse, noTxKeyboard: !opts.txKeyboard });
-  // Let main enrich with ws_host/ws_port
-  window.kvm.requestControl(d.ip, {
-    map: opts.map,
-    interp: opts.interp,
-    interp_rate_hz: opts.interp_rate_hz,
-    interp_step_px: opts.interp_step_px,
-    deadzone_px: opts.deadzone_px,
-    speed: opts.speed
+  
+  await window.kvm.startServer({ 
+    hotkey: opts.hotkey, 
+    noTxMouse: !opts.txMouse, 
+    noTxKeyboard: !opts.txKeyboard 
   });
-  statusEl.textContent = 'Anfrage gesendet – warte auf Bestätigung…';
+  
+  window.kvm.requestControl(device.ip, opts);
+  statusBar.textContent = '📡 Anfrage gesendet...';
+  statusBar.className = 'status-bar';
 }
 
-$('#btnRequest').onclick = doRequest;
-$('#btnDisconnect').onclick = () => window.kvm.disconnectClient();
-$('#btnManual').onclick = () => {
-  const host = prompt('Ziel-Host/IP:');
+// Manual connect
+async function manualConnect() {
+  const host = prompt('Ziel-Host oder IP-Adresse:');
   if (!host) return;
+  
   const opts = getOptions();
-  window.kvm.startServer({ hotkey: opts.hotkey, noTxMouse: !opts.txMouse, noTxKeyboard: !opts.txKeyboard });
-  window.kvm.manualRequest(host, {
-    map: opts.map,
-    interp: opts.interp,
-    interp_rate_hz: opts.interp_rate_hz,
-    interp_step_px: opts.interp_step_px,
-    deadzone_px: opts.deadzone_px,
-    speed: opts.speed
+  await window.kvm.startServer({ 
+    hotkey: opts.hotkey, 
+    noTxMouse: !opts.txMouse, 
+    noTxKeyboard: !opts.txKeyboard 
   });
-  statusEl.textContent = 'Anfrage gesendet – warte auf Bestätigung…';
-};
-$('#btnStartServer').onclick = () => {
-  const opts = getOptions();
-  window.kvm.startServer({ hotkey: opts.hotkey, noTxMouse: !opts.txMouse, noTxKeyboard: !opts.txKeyboard });
-};
-$('#btnStopServer').onclick = () => window.kvm.stopServer && window.kvm.stopServer();
+  
+  window.kvm.manualRequest(host, opts);
+  statusBar.textContent = '📡 Verbinde manuell mit ' + host;
+  statusBar.className = 'status-bar';
+}
 
+// Button handlers
+$('#btnRequest').onclick = requestControl;
+$('#btnDisconnect').onclick = () => {
+  window.kvm.disconnectClient();
+  statusBar.textContent = '✅ Getrennt';
+  statusBar.className = 'status-bar status-ok';
+};
+$('#btnManual').onclick = manualConnect;
+
+$('#btnChoosePython').onclick = async () => {
+  const path = await window.kvm.choosePython();
+  if (path) pythonPath.textContent = path;
+};
+
+$('#btnInstall').onclick = async () => {
+  statusBar.textContent = '⚙️ Installiere Abhängigkeiten...';
+  statusBar.className = 'status-bar';
+  await window.kvm.runSetup();
+};
+
+$('#btnOpenAcc').onclick = () => window.kvm.openPermissions('accessibility');
+$('#btnOpenInput').onclick = () => window.kvm.openPermissions('input');
+
+inputPort.onchange = () => {
+  const port = parseInt(inputPort.value, 10);
+  if (port > 0) window.kvm.setServerPort(port);
+};
+
+// IPC listeners
 window.kvm.onDevicesUpdate((data) => {
   const { devices: list, extra } = data;
   devices = list || [];
   renderDevices();
-  if (extra && extra._response) {
-    const accepted = !!extra._response.msg.accepted;
-    statusEl.textContent = accepted ? 'Freigabe erteilt – Remote aktiv' : 'Freigabe abgelehnt';
+  
+  if (extra?._response) {
+    const accepted = extra._response.msg.accepted;
+    statusBar.textContent = accepted ? '✅ Verbunden!' : '❌ Verbindung abgelehnt';
+    statusBar.className = accepted ? 'status-bar status-ok' : 'status-bar status-error';
   }
 });
 
 window.kvm.onStatusUpdate((text) => {
-  statusEl.textContent = text;
+  statusBar.textContent = text;
+  statusBar.className = 'status-bar';
 });
 
-// Setup UI wiring
-const lblPython = $('#lblPython');
-const numPort = $('#numPort');
-$('#btnChoosePy').onclick = async () => {
-  const p = await window.kvm.choosePython();
-  if (p) lblPython.textContent = `Python: ${p}`;
-};
-$('#btnInstallDeps').onclick = async () => {
-  statusEl.textContent = 'Setup läuft…';
-  await window.kvm.runSetup();
-};
-$('#btnOpenAcc').onclick = () => window.kvm.openPermissions('accessibility');
-$('#btnOpenInput').onclick = () => window.kvm.openPermissions('input');
-$('#btnApplyPort').onclick = () => {
-  const p = parseInt(numPort.value, 10);
-  if (!p || p <= 0) return alert('Bitte gültigen Port angeben.');
-  window.kvm.setServerPort(p);
-};
+window.kvm.onSetupLog((log) => {
+  console.log('[Setup]', log);
+});
 
-// Initialize config view
+// Initialize
 (async () => {
   const cfg = await window.kvm.getConfig();
-  if (cfg?.pythonPath) lblPython.textContent = `Python: ${cfg.pythonPath}`;
-  if (cfg?.wsPort) numPort.value = cfg.wsPort;
+  if (cfg?.pythonPath) pythonPath.textContent = cfg.pythonPath;
+  if (cfg?.wsPort) inputPort.value = cfg.wsPort;
 })();
