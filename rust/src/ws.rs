@@ -2,7 +2,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, connect_async, tungstenite::protocol::Message as WsMsg};
 use serde_json::Value;
-use enigo::{Enigo, MouseControllable};
+use enigo::{Enigo, Mouse, Settings, Coordinate};
 
 pub async fn run_ws_server(host: &str, port: u16) -> anyhow::Result<()> {
     let addr = format!("{}:{}", host, port);
@@ -21,7 +21,6 @@ pub async fn run_ws_server(host: &str, port: u16) -> anyhow::Result<()> {
 
 async fn handle_ws_conn(stream: TcpStream) -> anyhow::Result<()> {
     let mut ws = accept_async(stream).await?;
-    let mut enigo = Enigo::new();
     while let Some(msg) = ws.next().await {
         match msg {
             Ok(WsMsg::Text(t)) => {
@@ -29,7 +28,10 @@ async fn handle_ws_conn(stream: TcpStream) -> anyhow::Result<()> {
                     if v.get("type").and_then(|s| s.as_str()) == Some("mouse_move") {
                         let x = v.get("x").and_then(|n| n.as_i64()).unwrap_or(0) as i32;
                         let y = v.get("y").and_then(|n| n.as_i64()).unwrap_or(0) as i32;
-                        enigo.mouse_move_to(x, y);
+                        // Create Enigo inside the per-message scope so it doesn't cross an await
+                        if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
+                            let _ = enigo.move_mouse(x, y, Coordinate::Abs);
+                        }
                     }
                 }
             }

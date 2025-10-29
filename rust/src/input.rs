@@ -1,5 +1,5 @@
 use futures::SinkExt;
-use rdev::{Event, EventType, Key, grab};
+use rdev::{Event, EventType, Key};
 
 pub fn run_capture_client(url: String) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -19,7 +19,7 @@ pub fn run_capture_client(url: String) {
     let capturing_cb = capturing.clone();
 
     // Global grab: suppress local when capturing (toggle on F12)
-    let _ = grab(move |event: Event| {
+    let _ = rdev::grab(move |event: Event| {
         match event.event_type {
             EventType::KeyPress(Key::F12) => {
                 let now = !capturing_cb.load(std::sync::atomic::Ordering::Relaxed);
