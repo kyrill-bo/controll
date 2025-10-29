@@ -122,12 +122,12 @@ impl Discovery {
                                 }
                             }
                         }
-                        Message::RequestControl { from, to, name, ws_host, ws_port, options: _ } => {
+                        Message::RequestControl { from, to, name, ws_host, ws_port: _, options: _ } => {
                             if to.as_deref().map(|t| t == self.instance_id).unwrap_or(true) {
-                                println!("[disc] request from {} ({})", name, from);
-                                if let Some(tx) = &self.event_tx {
-                                    let _ = tx.send(DiscEvent::RequestReceived { from_inst: from, from_name: name, ws_host, ws_port });
-                                }
+                                println!("[disc] request from {} ({}) -> auto-accept", name, from);
+                                // Auto-accept: immediately respond accepted to requester
+                                let resp = Message::ResponseControl { from: self.instance_id.clone(), accepted: true };
+                                self.send_unicast(&ws_host, &resp);
                             }
                         }
                         Message::ResponseControl { from, accepted } => {

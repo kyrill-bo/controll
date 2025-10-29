@@ -27,8 +27,12 @@ impl UiApp {
                 DiscEvent::RequestReceived { from_inst: _, from_name, ws_host, ws_port } => {
                     self.incoming = Some((from_name, ws_host, ws_port));
                 }
-                DiscEvent::ResponseAccepted { host: _, port: _ } => {
-                    self.status = "Response accepted".into();
+                DiscEvent::ResponseAccepted { host, port } => {
+                    self.status = format!("Connecting WS to {}:{}", host, port);
+                    let url = format!("ws://{}:{}", host, port);
+                    std::thread::spawn(move || {
+                        if let Ok(rt) = tokio::runtime::Runtime::new() { let _ = rt.block_on(crate::ws::run_ws_client(&url)); }
+                    });
                 }
             }
         }
