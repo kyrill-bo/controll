@@ -68,16 +68,19 @@ function createWindow() {
 }
 
 function startDiscovery() {
+  console.log('[Discovery] Starting on', MCAST_GRP, ':', MCAST_PORT);
   udpSocket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
-  udpSocket.on('error', (err) => console.error('UDP error', err));
+  udpSocket.on('error', (err) => console.error('[Discovery] UDP error', err));
   udpSocket.on('message', (msgBuf, rinfo) => {
     let msg;
     try { msg = JSON.parse(msgBuf.toString('utf8')); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
     const type = msg.type;
+    console.log('[Discovery] Received', type, 'from', rinfo.address);
     if (type === 'BEACON') {
       const inst = msg.instance_id;
       if (!inst || inst === instanceId) return;
+      console.log('[Discovery] New device:', msg.name, msg.ip, 'instance:', inst.slice(0, 8));
       const info = {
         name: msg.name || 'Unbekannt',
         ip: msg.ip || rinfo.address,
@@ -116,7 +119,13 @@ function startDiscovery() {
     }
   });
   udpSocket.bind(MCAST_PORT, () => {
-    try { udpSocket.addMembership(MCAST_GRP); } catch {}
+    console.log('[Discovery] Bound to port', MCAST_PORT);
+    try { 
+      udpSocket.addMembership(MCAST_GRP); 
+      console.log('[Discovery] Joined multicast group', MCAST_GRP);
+    } catch (err) {
+      console.error('[Discovery] Failed to join multicast:', err);
+    }
   });
 
   // Beacon sender
@@ -129,7 +138,10 @@ function startDiscovery() {
       ws_port: wsPort,
       version: 1
     });
-    udpSocket.send(Buffer.from(payload, 'utf8'), MCAST_PORT, MCAST_GRP);
+    console.log('[Discovery] Sending beacon as', instanceName, getPrimaryIp());
+    udpSocket.send(Buffer.from(payload, 'utf8'), MCAST_PORT, MCAST_GRP, (err) => {
+      if (err) console.error('[Discovery] Beacon send error:', err);
+    });
   }, BEACON_INTERVAL);
 
   // Prune stale devices
@@ -138,6 +150,7 @@ function startDiscovery() {
     let removed = false;
     for (const [inst, info] of Array.from(devices.entries())) {
       if (now - (info.last_seen || now) > DEVICE_TTL) {
+        console.log('[Discovery] Removing stale device:', info.name);
         devices.delete(inst);
         removed = true;
       }
@@ -155,8 +168,10 @@ function stopDiscovery() {
 }
 
 function sendRequest(targetIp, payload) {
+  // Ensure host/port are set from this instance
   const enriched = {
     ...payload,
+    name: instanceName,
     ws_host: getPrimaryIp(),
     ws_port: wsPort
   };
@@ -165,7 +180,15 @@ function sendRequest(targetIp, payload) {
     type: 'REQUEST_CONTROL',
     from: instanceId
   }), 'utf8');
-  try { udpSocket.send(buf, MCAST_PORT, targetIp); } catch {}
+  console.log('[Discovery] Sending REQUEST_CONTROL to', targetIp, 'from', instanceName);
+  try { 
+    udpSocket.send(buf, MCAST_PORT, targetIp, (err) => {
+      if (err) console.error('[Discovery] Request send error:', err);
+      else console.log('[Discovery] Request sent successfully');
+    }); 
+  } catch (err) {
+    console.error('[Discovery] Request error:', err);
+  }
 }
 
 function sendResponse(targetIp, payload) {
@@ -180,6 +203,7 @@ function sendResponse(targetIp, payload) {
 function sendDevicesToUi(extra) {
   if (!mainWindow) return;
   const list = Array.from(devices.values()).sort((a, b) => a.name.localeCompare(b.name));
+  console.log('[Discovery] Sending', list.length, 'devices to UI');
   mainWindow.webContents.send('devices:update', { devices: list, extra });
 }
 
