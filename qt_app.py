@@ -95,6 +95,7 @@ class Discovery(threading.Thread):
                 continue
             except Exception as e:
                 print(f"[Discovery] Error: {e}")
+                self.window.write_event_value('-LOG_EVENT-', f'[Discovery] Error: {e}')
 
     def stop(self):
         self._running = False
@@ -117,6 +118,7 @@ class Discovery(threading.Thread):
             'version': 1,
         }
         self._broadcast(msg)
+        self.window.write_event_value('-LOG_EVENT-', f"[Discovery] Beacon sent {self.name} {get_primary_ip()}:{self.ws_port}")
 
     def _prune_devices(self):
         now = time.time()
@@ -149,15 +151,15 @@ class Discovery(threading.Thread):
             )
             if self._devices.get(inst) != dev:
                 self._devices[inst] = dev
-                self.window.write_event_value(('-DEVICES_CHANGED-', {k: vars(v) for k, v in self._devices.items()}), None)
+                self.window.write_event_value('-DEVICES_CHANGED-', {k: vars(v) for k, v in self._devices.items()})
 
         elif mtype == 'REQUEST_CONTROL':
             to = msg.get('to')
             if to and to != self.instance_id:
                 return
-            self.window.write_event_value(('-REQUEST_RECEIVED-', (msg, addr)), None)
+            self.window.write_event_value('-REQUEST_RECEIVED-', (msg, addr))
         elif mtype == 'RESPONSE_CONTROL':
-            self.window.write_event_value(('-RESPONSE_RECEIVED-', (msg, addr)), None)
+            self.window.write_event_value('-RESPONSE_RECEIVED-', (msg, addr))
 
     def send_request(self, target_ip: str, options: dict, to: str | None = None):
         msg = {
@@ -206,12 +208,16 @@ class App:
             [sg.Text('Hotkey:'), sg.Combo(['f13', 'f12', 'f11', 'f14'], default_value='f13', key='-HOTKEY-')],
             [sg.Checkbox('Interpolation', default=True, key='-INTERP-'),
              sg.Checkbox('Send Mouse', default=True, key='-TX_MOUSE-'),
-             sg.Checkbox('Send Keyboard', default=True, key='-TX_KB-')]
+             sg.Checkbox('Send Keyboard', default=True, key='-TX_KB-')],
+            [sg.Checkbox('Show Logs', default=False, key='-SHOW_LOGS-')]
         ]
+
+        logs_layout = [[sg.Multiline('', size=(80, 10), key='-LOG-', autoscroll=True, write_only=True, disabled=True)]]
 
         layout = [
             [sg.Frame('Available Devices', devices_layout)],
             [sg.Frame('Settings', settings_layout)],
+            [sg.Frame('Logs', logs_layout, key='-LOG_FRAME-', visible=False)],
             [sg.StatusBar('Ready', key='-STATUS-')]
         ]
 
@@ -272,6 +278,12 @@ class App:
                 self.start_server()
                 self.discovery.send_request(host, self.current_options(values), to=None)
                 self._set_status('Request sent - waiting for confirmation...')
+
+        elif event == '-SHOW_LOGS-':
+            self.window['-LOG_FRAME-'].update(visible=values['-SHOW_LOGS-'])
+
+        elif event == '-LOG_EVENT-':
+            self.window['-LOG-'].print(values[event])
 
         elif event == '-DISCONNECT-':
             self.disconnect_client()
