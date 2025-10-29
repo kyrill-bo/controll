@@ -14,8 +14,9 @@ ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print "   • " $2 ":8765"}'
 echo ""
 
 # Prüfen ob Virtual Environment existiert
+RATE_MS=${RATE_MS:-2.0}
 if [ -f ".venv/bin/python" ]; then
-    ./.venv/bin/python server.py --host 0.0.0.0 --port 8765
+    ./.venv/bin/python server.py --host 0.0.0.0 --port 8765 --mouse-throttle-ms "$RATE_MS"
 else
-    python3 server.py --host 0.0.0.0 --port 8765
+    python3 server.py --host 0.0.0.0 --port 8765 --mouse-throttle-ms "$RATE_MS"
 fi

@@ -28,8 +28,8 @@ class KVMServer:
         
         # Performance-Optimierungen
         self.last_mouse_time = 0
-        # Standard-Throttle (~4ms ≈ 250 Hz) für flüssigere Bewegung
-        self.mouse_throttle = 0.004
+        # Standard-Throttle (~2ms ≈ 500 Hz) für sehr flüssige Bewegung
+        self.mouse_throttle = 0.002
         
         # Optionen für lokale Unterbindung
         self.suppress_mouse = True      # Lokale Maus unterbinden wenn Remote aktiv
@@ -434,8 +434,8 @@ def main():
                         help='Lokale Maus nicht unterbinden (Fallback, wenn macOS Rechte fehlen)')
     parser.add_argument('--no-suppress-keyboard', action='store_true',
                         help='Lokale Tastatur nicht unterbinden (Fallback, wenn macOS Rechte fehlen)')
-    parser.add_argument('--mouse-throttle-ms', type=float, default=4.0,
-                        help='Mindestabstand zwischen Maus-Events in Millisekunden (Standard 4.0 ≈ 250 Hz)')
+    parser.add_argument('--mouse-throttle-ms', type=float, default=2.0,
+                        help='Mindestabstand zwischen Maus-Events in Millisekunden (Standard 2.0 ≈ 500 Hz)')
     
     args = parser.parse_args()
     
@@ -445,7 +445,8 @@ def main():
     if args.no_suppress_keyboard:
         server.suppress_keyboard = False
     if args.mouse_throttle_ms is not None and args.mouse_throttle_ms >= 0:
-        server.mouse_throttle = args.mouse_throttle_ms / 1000.0
+        # clamp to a safe minimum (0.5 ms) to avoid busy-looping
+        server.mouse_throttle = max(0.0005, args.mouse_throttle_ms / 1000.0)
     
     print(f"Server startet auf {args.host}:{args.port}")
     if args.host == '0.0.0.0':
