@@ -1,3 +1,12 @@
+To install the `_tkinter` module for Python 3.14 on macOS, you typically need to install `tcl-tk` via Homebrew.
+
+```bash
+brew install tcl-tk
+brew reinstall python@3.14
+```
+
+This will install the necessary Tcl/Tk libraries and then re-install Python 3.14, ensuring it links correctly with the newly installed Tkinter dependencies.
+
 # KVM Over Network - Tastatur/Maus über Netzwerk teilen
 
 Dieses System ermöglicht es, Tastatur und Maus zwischen zwei Laptops über das Netzwerk zu teilen.

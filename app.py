@@ -11,12 +11,11 @@ import json
 import threading
 import time
 import uuid
+import subprocess
+import sys
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
-
-from server import KVMServer
-from client import KVMClient
-import asyncio
 
 MCAST_GRP = '239.255.255.250'
 MCAST_PORT = 54545
@@ -170,8 +169,8 @@ class App:
         self.instance_id = str(uuid.uuid4())
         self.name = socket.gethostname()
         self.ws_port = 8765
-        self.server_thread = None
-        self.client_thread = None
+        self.server_proc = None
+        self.client_proc = None
         self.server_started = False
         self._loop_lock = threading.Lock()
 
@@ -211,6 +210,8 @@ class App:
             on_update=self.on_discovery_update,
             on_request=self.on_request_control)
         self.discovery.start()
+        # Cleanup on close
+        self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
         # Devices model {instance_id: {...}}
         self.devices = {}
@@ -254,43 +255,41 @@ class App:
         if self.server_started:
             return
         self.server_started = True
-        opts = {
-            'transmit_mouse': self.var_tx_mouse.get(),
-            'transmit_keyboard': self.var_tx_keyboard.get(),
-            'switch_hotkey': self.var_hotkey.get(),
-        }
-        def _run():
-            server = KVMServer(host='0.0.0.0', port=self.ws_port, **opts)
-            try:
-                asyncio.run(server.start_server())
-            except Exception as e:
-                # Server thread exits
-                pass
-        self.server_thread = threading.Thread(target=_run, daemon=True)
-        self.server_thread.start()
+        # Launch server as subprocess to keep macOS event taps on main thread of its process
+        args = [sys.executable, os.path.join(os.path.dirname(__file__), 'server.py'),
+                '--host', '0.0.0.0', '--port', str(self.ws_port),
+                '--hotkey', self.var_hotkey.get()]
+        if not self.var_tx_mouse.get():
+            args.append('--no-tx-mouse')
+        if not self.var_tx_keyboard.get():
+            args.append('--no-tx-keyboard')
+        try:
+            self.server_proc = subprocess.Popen(args)
+        except Exception as e:
+            messagebox.showerror('Fehler', f'Server konnte nicht gestartet werden: {e}')
+            self.server_started = False
+            return
         self.lbl_status.config(text=f'Server gestartet auf Port {self.ws_port}')
 
     def start_client(self, host: str, port: int, options: dict):
-        # Options map to KVMClient args
+        # Build client subprocess args
         map_mode = options.get('map', self.var_map.get())
         interp = bool(options.get('interp', self.var_interp.get()))
         interp_rate = int(options.get('interp_rate_hz', self.var_interp_rate.get()))
         interp_step = int(options.get('interp_step_px', self.var_interp_step.get()))
         deadzone = int(options.get('deadzone_px', self.var_deadzone.get()))
         speed = float(options.get('speed', self.var_speed.get()))
-        def _run():
-            client = KVMClient(host, port, map_mode=map_mode,
-                               interp_enabled=interp,
-                               interp_rate_hz=interp_rate,
-                               interp_step_px=interp_step,
-                               deadzone_px=deadzone,
-                               speed=speed)
-            try:
-                asyncio.run(client.run())
-            except Exception:
-                pass
-        self.client_thread = threading.Thread(target=_run, daemon=True)
-        self.client_thread.start()
+        args = [sys.executable, os.path.join(os.path.dirname(__file__), 'client.py'),
+                host, '--port', str(port), '--map', map_mode,
+                '--interp-rate-hz', str(interp_rate), '--interp-step-px', str(interp_step),
+                '--deadzone-px', str(deadzone), '--speed', str(speed)]
+        if interp:
+            args.insert(6, '--interp')  # after map
+        try:
+            self.client_proc = subprocess.Popen(args)
+        except Exception as e:
+            messagebox.showerror('Fehler', f'Client konnte nicht gestartet werden: {e}')
+            return
 
     def request_control(self):
         # Get selection
@@ -359,6 +358,19 @@ class App:
         ttk.OptionMenu(frm, self.var_hotkey, self.var_hotkey.get(), 'f13', 'f12', 'f11', 'f14').grid(row=7, column=1, sticky='w')
 
         ttk.Button(frm, text='Schließen', command=w.destroy).grid(row=8, column=0, pady=8, sticky='w')
+
+    def on_close(self):
+        try:
+            if self.client_proc and self.client_proc.poll() is None:
+                self.client_proc.terminate()
+        except Exception:
+            pass
+        try:
+            if self.server_proc and self.server_proc.poll() is None:
+                self.server_proc.terminate()
+        except Exception:
+            pass
+        self.root.destroy()
 
 
 def main():

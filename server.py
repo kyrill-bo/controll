@@ -486,10 +486,23 @@ def main():
                         help='Lokale Tastatur nicht unterbinden (Fallback, wenn macOS Rechte fehlen)')
     parser.add_argument('--mouse-throttle-ms', type=float, default=2.0,
                         help='Mindestabstand zwischen Maus-Events in Millisekunden (Standard 2.0 ≈ 500 Hz)')
+    parser.add_argument('--hotkey', type=str, default='f13',
+                        help='Umschalt-Hotkey (z.B. f11, f12, f13, f14)')
+    parser.add_argument('--tx-mouse', dest='tx_mouse', action='store_true', default=True,
+                        help='Maus-Ereignisse übertragen (Default an)')
+    parser.add_argument('--no-tx-mouse', dest='tx_mouse', action='store_false',
+                        help='Maus-Ereignisse nicht übertragen')
+    parser.add_argument('--tx-keyboard', dest='tx_keyboard', action='store_true', default=True,
+                        help='Tastatur-Ereignisse übertragen (Default an)')
+    parser.add_argument('--no-tx-keyboard', dest='tx_keyboard', action='store_false',
+                        help='Tastatur-Ereignisse nicht übertragen')
     
     args = parser.parse_args()
     
-    server = KVMServer(host=args.host, port=args.port)
+    server = KVMServer(host=args.host, port=args.port,
+                       transmit_mouse=args.tx_mouse,
+                       transmit_keyboard=args.tx_keyboard,
+                       switch_hotkey=args.hotkey)
     if args.no_suppress_mouse:
         server.suppress_mouse = False
     if args.no_suppress_keyboard:
