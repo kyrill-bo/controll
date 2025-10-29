@@ -1,3 +1,3 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-python3 qt_app.py
+./.venv/bin/python qt_app.py

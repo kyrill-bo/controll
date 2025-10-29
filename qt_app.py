@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Qt GUI for KVM Control (PySide6)
+GUI for KVM Control (PySimpleGUI)
 - Multicast discovery (BEACON)
 - Request/approval flow via UDP
-- Spawns Python server.py and client.py as subprocesses (QProcess)
-- Compact, native-feeling UI; avoids Electron
+- Spawns Python server.py and client.py as subprocesses
+- Compact, native-feeling UI
 
 Run: python3 qt_app.py
 """
@@ -15,15 +15,17 @@ import json
 import uuid
 import time
 import socket
+import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Dict
 
-from PySide6 import QtCore, QtWidgets, QtNetwork
+import FreeSimpleGUI as sg
 
 MCAST_GRP = '239.255.255.250'
 MCAST_PORT = 54545
-BEACON_INTERVAL_MS = 2000
-DEVICE_TTL_MS = BEACON_INTERVAL_MS * 3 + 2000
+BEACON_INTERVAL_S = 2
+DEVICE_TTL_S = BEACON_INTERVAL_S * 3 + 2
 
 
 def get_primary_ip() -> str:
@@ -46,47 +48,58 @@ class Device:
     last_seen: float
 
 
-class Discovery(QtCore.QObject):
-    devicesChanged = QtCore.Signal(dict)
-    requestReceived = QtCore.Signal(dict, str)  # (request msg, sender ip)
-    responseReceived = QtCore.Signal(dict, str)
-
-    def __init__(self, instance_id: str, name: str, ws_port: int, parent=None):
-        super().__init__(parent)
+class Discovery(threading.Thread):
+    def __init__(self, instance_id: str, name: str, ws_port: int, window: sg.Window):
+        super().__init__(daemon=True)
         self.instance_id = instance_id
         self.name = name
         self.ws_port = ws_port
+        self.window = window
         self._devices: Dict[str, Device] = {}
+        self.sock = self._create_socket()
+        self._running = True
 
-        self.sock = QtNetwork.QUdpSocket(self)
-        # Reuse address
-        self.sock.bind(QtNetwork.QHostAddress.AnyIPv4, MCAST_PORT, QtNetwork.QUdpSocket.ShareAddress | QtNetwork.QUdpSocket.ReuseAddressHint)
-        # Join multicast
-        self.sock.joinMulticastGroup(QtNetwork.QHostAddress(MCAST_GRP))
-        self.sock.readyRead.connect(self._on_ready_read)
+    def _create_socket(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('', MCAST_PORT))
+        mreq = socket.inet_aton(MCAST_GRP) + socket.inet_aton('0.0.0.0')
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.settimeout(1.0)
+        return sock
 
-        # Beacon + prune timers
-        self.beacon_timer = QtCore.QTimer(self)
-        self.beacon_timer.timeout.connect(self._send_beacon)
-        self.beacon_timer.start(BEACON_INTERVAL_MS)
+    def run(self):
+        last_beacon = 0
+        last_prune = 0
 
-        self.prune_timer = QtCore.QTimer(self)
-        self.prune_timer.timeout.connect(self._prune_devices)
-        self.prune_timer.start(2000)
+        while self._running:
+            now = time.time()
+            if now - last_beacon > BEACON_INTERVAL_S:
+                self._send_beacon()
+                last_beacon = now
 
-        # Kick initial update
-        QtCore.QTimer.singleShot(100, self._send_beacon)
+            if now - last_prune > 2:
+                self._prune_devices()
+                last_prune = now
+
+            try:
+                data, addr = self.sock.recvfrom(1024)
+                self._handle_message(data, addr[0])
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"[Discovery] Error: {e}")
+
+    def stop(self):
+        self._running = False
 
     def _send(self, payload: dict, target_ip: str):
         data = json.dumps(payload).encode('utf-8')
-        self.sock.writeDatagram(data, QtNetwork.QHostAddress(target_ip), MCAST_PORT)
+        self.sock.sendto(data, (target_ip, MCAST_PORT))
 
     def _broadcast(self, payload: dict):
         data = json.dumps(payload).encode('utf-8')
-        # Multicast
-        self.sock.writeDatagram(data, QtNetwork.QHostAddress(MCAST_GRP), MCAST_PORT)
-        # Broadcast fallback
-        self.sock.writeDatagram(data, QtNetwork.QHostAddress.Broadcast, MCAST_PORT)
+        self.sock.sendto(data, (MCAST_GRP, MCAST_PORT))
 
     def _send_beacon(self):
         msg = {
@@ -100,45 +113,45 @@ class Discovery(QtCore.QObject):
         self._broadcast(msg)
 
     def _prune_devices(self):
-        now = time.time() * 1000
+        now = time.time()
         removed = False
         for inst, dev in list(self._devices.items()):
-            if now - dev.last_seen > DEVICE_TTL_MS:
+            if now - dev.last_seen > DEVICE_TTL_S:
                 del self._devices[inst]
                 removed = True
         if removed:
-            self.devicesChanged.emit({k: vars(v) for k, v in self._devices.items()})
+            self.window.write_event_value(('-DEVICES_CHANGED-', {k: vars(v) for k, v in self._devices.items()}), None)
 
-    def _on_ready_read(self):
-        while self.sock.hasPendingDatagrams():
-            datagram, host, port = self.sock.readDatagram(self.sock.pendingDatagramSize())
-            try:
-                msg = json.loads(datagram.decode('utf-8'))
-            except Exception:
-                continue
-            if not isinstance(msg, dict):
-                continue
-            mtype = msg.get('type')
-            if mtype == 'BEACON':
-                inst = msg.get('instance_id')
-                if not inst or inst == self.instance_id:
-                    continue
-                dev = Device(
-                    instance_id=inst,
-                    name=msg.get('name', 'Unbekannt'),
-                    ip=msg.get('ip', host.toString()),
-                    ws_port=int(msg.get('ws_port', 8765)),
-                    last_seen=time.time()*1000
-                )
+    def _handle_message(self, data: bytes, addr: str):
+        try:
+            msg = json.loads(data.decode('utf-8'))
+        except Exception:
+            return
+        if not isinstance(msg, dict):
+            return
+        mtype = msg.get('type')
+        if mtype == 'BEACON':
+            inst = msg.get('instance_id')
+            if not inst or inst == self.instance_id:
+                return
+            dev = Device(
+                instance_id=inst,
+                name=msg.get('name', 'Unknown'),
+                ip=msg.get('ip', addr),
+                ws_port=int(msg.get('ws_port', 8765)),
+                last_seen=time.time()
+            )
+            if self._devices.get(inst) != dev:
                 self._devices[inst] = dev
-                self.devicesChanged.emit({k: vars(v) for k, v in self._devices.items()})
-            elif mtype == 'REQUEST_CONTROL':
-                to = msg.get('to')
-                if to and to != self.instance_id:
-                    continue
-                self.requestReceived.emit(msg, host.toString())
-            elif mtype == 'RESPONSE_CONTROL':
-                self.responseReceived.emit(msg, host.toString())
+                self.window.write_event_value(('-DEVICES_CHANGED-', {k: vars(v) for k, v in self._devices.items()}), None)
+
+        elif mtype == 'REQUEST_CONTROL':
+            to = msg.get('to')
+            if to and to != self.instance_id:
+                return
+            self.window.write_event_value(('-REQUEST_RECEIVED-', (msg, addr)), None)
+        elif mtype == 'RESPONSE_CONTROL':
+            self.window.write_event_value(('-RESPONSE_RECEIVED-', (msg, addr)), None)
 
     def send_request(self, target_ip: str, options: dict, to: str | None = None):
         msg = {
@@ -161,227 +174,187 @@ class Discovery(QtCore.QObject):
         self._send(msg, target_ip)
 
 
-class MainWindow(QtWidgets.QMainWindow):
+class App:
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle('KVM Control')
-        self.setFixedSize(900, 600)
-
-        # Identity
         self.instance_id = str(uuid.uuid4())
         self.name = socket.gethostname()
         self.ws_port = 8765
+        self.server_proc = None
+        self.client_proc = None
+        self.discovery = None
 
-        # Processes
-        self.server_proc = QtCore.QProcess(self)
-        self.client_proc = QtCore.QProcess(self)
+        sg.theme('DarkBlue')
 
-        # UI
-        central = QtWidgets.QWidget()
-        self.setCentralWidget(central)
-        v = QtWidgets.QVBoxLayout(central)
+        setup_layout = [
+            [sg.Text('Python:'), sg.Text(sys.executable, key='-PYTHON-')],
+            [sg.Text('WS-Port:'), sg.Spin(list(range(1024, 65535)), initial_value=self.ws_port, key='-WS_PORT-'),
+             sg.Button('Apply', key='-APPLY_PORT-')],
+            [sg.Button('Install Dependencies', key='-INSTALL-')]
+        ]
 
-        # Setup row
-        setup_box = QtWidgets.QGroupBox('Setup')
-        v.addWidget(setup_box)
-        setup = QtWidgets.QGridLayout(setup_box)
-        self.lbl_python = QtWidgets.QLabel(sys.executable)
-        setup.addWidget(QtWidgets.QLabel('Python:'), 0, 0)
-        setup.addWidget(self.lbl_python, 0, 1)
-        self.btn_install = QtWidgets.QPushButton('Abhängigkeiten installieren')
-        setup.addWidget(self.btn_install, 0, 2)
-        setup.addWidget(QtWidgets.QLabel('WS-Port:'), 1, 0)
-        self.spin_port = QtWidgets.QSpinBox()
-        self.spin_port.setRange(1024, 65535)
-        self.spin_port.setValue(self.ws_port)
-        setup.addWidget(self.spin_port, 1, 1)
-        self.btn_apply_port = QtWidgets.QPushButton('Übernehmen')
-        setup.addWidget(self.btn_apply_port, 1, 2)
+        devices_layout = [
+            [sg.Listbox([], size=(60, 10), key='-DEVICES-', enable_events=True)],
+            [sg.Button('Request Control', key='-REQUEST-'), sg.Button('Manual Connect...', key='-MANUAL-'),
+             sg.Button('Disconnect', key='-DISCONNECT-')]
+        ]
 
-        # Devices
-        dev_box = QtWidgets.QGroupBox('Verfügbare Geräte')
-        v.addWidget(dev_box)
-        dev_layout = QtWidgets.QVBoxLayout(dev_box)
-        self.list = QtWidgets.QListWidget()
-        dev_layout.addWidget(self.list)
-        row = QtWidgets.QHBoxLayout()
-        self.btn_request = QtWidgets.QPushButton('Steuerung anfordern')
-        self.btn_manual = QtWidgets.QPushButton('Manuell verbinden…')
-        self.btn_disconnect = QtWidgets.QPushButton('Trennen')
-        row.addWidget(self.btn_request)
-        row.addWidget(self.btn_manual)
-        row.addWidget(self.btn_disconnect)
-        dev_layout.addLayout(row)
+        settings_layout = [
+            [sg.Text('Mapping:'), sg.Combo(['relative', 'normalized', 'preserve'], default_value='relative', key='-MAP-')],
+            [sg.Text('Rate (Hz):'), sg.Spin(list(range(30, 1001)), initial_value=240, key='-RATE-')],
+            [sg.Text('Step (px):'), sg.Spin(list(range(1, 201)), initial_value=10, key='-STEP-')],
+            [sg.Text('Deadzone (px):'), sg.Spin(list(range(0, 21)), initial_value=1, key='-DEADZONE-')],
+            [sg.Text('Speed ×:'), sg.Spin([f'{i/10:.1f}' for i in range(1, 51)], initial_value='1.0', key='-SPEED-')],
+            [sg.Text('Hotkey:'), sg.Combo(['f13', 'f12', 'f11', 'f14'], default_value='f13', key='-HOTKEY-')],
+            [sg.Checkbox('Interpolation', default=True, key='-INTERP-'),
+             sg.Checkbox('Send Mouse', default=True, key='-TX_MOUSE-'),
+             sg.Checkbox('Send Keyboard', default=True, key='-TX_KB-')]
+        ]
 
-        # Settings
-        set_box = QtWidgets.QGroupBox('Einstellungen')
-        v.addWidget(set_box)
-        grid = QtWidgets.QGridLayout(set_box)
-        self.combo_map = QtWidgets.QComboBox(); self.combo_map.addItems(['relative','normalized','preserve'])
-        self.chk_interp = QtWidgets.QCheckBox('Interpolation'); self.chk_interp.setChecked(True)
-        self.spin_rate = QtWidgets.QSpinBox(); self.spin_rate.setRange(30,1000); self.spin_rate.setValue(240)
-        self.spin_step = QtWidgets.QSpinBox(); self.spin_step.setRange(1,200); self.spin_step.setValue(10)
-        self.spin_dead = QtWidgets.QSpinBox(); self.spin_dead.setRange(0,20); self.spin_dead.setValue(1)
-        self.dbl_speed = QtWidgets.QDoubleSpinBox(); self.dbl_speed.setRange(0.1,5.0); self.dbl_speed.setSingleStep(0.1); self.dbl_speed.setValue(1.0)
-        self.combo_hotkey = QtWidgets.QComboBox(); self.combo_hotkey.addItems(['f13','f12','f11','f14'])
-        self.chk_tx_mouse = QtWidgets.QCheckBox('Maus senden'); self.chk_tx_mouse.setChecked(True)
-        self.chk_tx_kb = QtWidgets.QCheckBox('Tastatur senden'); self.chk_tx_kb.setChecked(True)
-        labels = ['Mapping','Rate (Hz)','Schritt (px)','Deadzone (px)','Speed ×','Hotkey','Übertragen']
-        widgets = [self.combo_map, self.spin_rate, self.spin_step, self.spin_dead, self.dbl_speed, self.combo_hotkey]
-        for i,(lab, w) in enumerate(zip(labels, widgets)):
-            grid.addWidget(QtWidgets.QLabel(lab+':'), i, 0); grid.addWidget(w, i, 1)
-        grid.addWidget(self.chk_interp, 0, 2)
-        grid.addWidget(self.chk_tx_mouse, 5, 2)
-        grid.addWidget(self.chk_tx_kb, 6, 2)
+        layout = [
+            [sg.Frame('Setup', setup_layout)],
+            [sg.Frame('Available Devices', devices_layout)],
+            [sg.Frame('Settings', settings_layout)],
+            [sg.StatusBar('Ready', key='-STATUS-')]
+        ]
 
-        # Status
-        self.lbl_status = QtWidgets.QLabel('Bereit')
-        v.addWidget(self.lbl_status)
-
-        # Discovery
-        self.discovery = Discovery(self.instance_id, self.name, self.ws_port, self)
-        self.discovery.devicesChanged.connect(self.on_devices_changed)
-        self.discovery.requestReceived.connect(self.on_request_received)
-        self.discovery.responseReceived.connect(self.on_response_received)
-
-        # Signals
-        self.list.itemDoubleClicked.connect(self.request_control)
-        self.btn_request.clicked.connect(self.request_control)
-        self.btn_manual.clicked.connect(self.manual_connect)
-        self.btn_disconnect.clicked.connect(self.disconnect_client)
-        self.btn_apply_port.clicked.connect(self.apply_port)
-        self.btn_install.clicked.connect(self.install_requirements)
-
-        # QProcess logging
-        self.server_proc.readyReadStandardOutput.connect(lambda: self._proc_log(self.server_proc, '[Server]'))
-        self.server_proc.readyReadStandardError.connect(lambda: self._proc_log(self.server_proc, '[Server]'))
-        self.client_proc.readyReadStandardOutput.connect(lambda: self._proc_log(self.client_proc, '[Client]'))
-        self.client_proc.readyReadStandardError.connect(lambda: self._proc_log(self.client_proc, '[Client]'))
-        self.server_proc.finished.connect(lambda code, _s: self._set_status(f'Server beendet ({code})'))
-        self.client_proc.finished.connect(lambda code, _s: self._set_status(f'Client beendet ({code})'))
+        self.window = sg.Window('KVM Control', layout, finalize=True)
+        self.discovery = Discovery(self.instance_id, self.name, self.ws_port, self.window)
+        self.discovery.start()
 
     def _set_status(self, text: str):
-        self.lbl_status.setText(text)
+        self.window['-STATUS-'].update(text)
 
-    def _proc_log(self, proc: QtCore.QProcess, prefix: str):
-        data = bytes(proc.readAllStandardOutput()).decode('utf-8') + bytes(proc.readAllStandardError()).decode('utf-8')
-        if data.strip():
-            print(prefix, data.strip())
-            self._set_status(prefix + ' ' + data.strip()[:100])
+    def _get_script_path(self, name: str) -> str:
+        return os.path.join(os.path.dirname(__file__), name)
 
-    def apply_port(self):
-        self.ws_port = int(self.spin_port.value())
-        self.discovery.ws_port = self.ws_port
-        # Restart server if running
-        if self.server_proc.state() != QtCore.QProcess.NotRunning:
-            try:
+    def handle_event(self, event, values):
+        if event == sg.WIN_CLOSED:
+            return False
+        elif event == '-DEVICES_CHANGED-':
+            devices = values[event]
+            self.window['-DEVICES-'].update([f"{info['name']}  {info['ip']}:{info['ws_port']}  [{inst[:8]}]" for inst, info in sorted(devices.items(), key=lambda kv: kv[1]['name'])],
+                                           set_to_index=0 if devices else None)
+        elif event == '-REQUEST_RECEIVED-':
+            req, addr = values[event]
+            name = req.get('name', addr)
+            if sg.popup_yes_no(f'{name} wants to control this computer. Allow?', title='Remote Access') == 'Yes':
+                self.discovery.send_response(addr, True)
+                self.start_client(req.get('ws_host'), int(req.get('ws_port', 8765)), req.get('options', {}))
+                self._set_status('Connected as client')
+            else:
+                self.discovery.send_response(addr, False)
+
+        elif event == '-RESPONSE_RECEIVED-':
+            resp, _addr = values[event]
+            if resp.get('accepted'):
+                self._set_status('Control granted - Remote active')
+            else:
+                self._set_status('Control denied')
+
+        elif event == '-APPLY_PORT-':
+            self.ws_port = int(values['-WS_PORT-'])
+            self.discovery.ws_port = self.ws_port
+            if self.server_proc:
                 self.server_proc.kill()
-            except Exception:
-                pass
+                self.server_proc = None
             self.start_server()
 
-    def on_devices_changed(self, devices: dict):
-        self.list.clear()
-        for inst, info in sorted(devices.items(), key=lambda kv: kv[1]['name']):
-            item = QtWidgets.QListWidgetItem(f"{info['name']}  {info['ip']}:{info['ws_port']}  [{inst[:8]}]")
-            item.setData(QtCore.Qt.UserRole, (inst, info))
-            self.list.addItem(item)
+        elif event == '-INSTALL-':
+            self.install_requirements()
 
-    def on_request_received(self, req: dict, addr: str):
-        name = req.get('name', addr)
-        host = req.get('ws_host')
-        port = int(req.get('ws_port', 8765))
-        options = req.get('options', {})
-        ans = QtWidgets.QMessageBox.question(self, 'Remote-Zugriff', f"{name} möchte diesen Rechner steuern. Erlauben?",
-                                             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
-        self.discovery.send_response(addr, ans == QtWidgets.QMessageBox.Yes)
-        if ans == QtWidgets.QMessageBox.Yes:
-            self.start_client(host, port, options)
-            self._set_status('Als Client verbunden')
+        elif event == '-REQUEST-':
+            if not values['-DEVICES-']:
+                self._set_status('Please select a device')
+                return True
+            selected_device_str = values['-DEVICES-'][0]
+            # This is a bit fragile, we should store the device info properly
+            # For now, let's parse the string
+            try:
+                ip = selected_device_str.split('  ')[1].split(':')[0]
+                inst = selected_device_str.split('[')[1].split(']')[0]
+                self.start_server()
+                self.discovery.send_request(ip, self.current_options(values), to=inst)
+                self._set_status('Request sent - waiting for confirmation...')
+            except IndexError:
+                self._set_status('Could not parse device info.')
 
-    def on_response_received(self, resp: dict, _addr: str):
-        if resp.get('accepted'):
-            self._set_status('Freigabe erteilt – Remote aktiv')
-        else:
-            self._set_status('Freigabe abgelehnt')
 
-    def current_options(self) -> dict:
+        elif event == '-MANUAL-':
+            host = sg.popup_get_text('Enter target host/IP:')
+            if host:
+                self.start_server()
+                self.discovery.send_request(host, self.current_options(values), to=None)
+                self._set_status('Request sent - waiting for confirmation...')
+
+        elif event == '-DISCONNECT-':
+            self.disconnect_client()
+
+        return True
+
+    def current_options(self, values) -> dict:
         return {
-            'map': self.combo_map.currentText(),
-            'interp': self.chk_interp.isChecked(),
-            'interp_rate_hz': int(self.spin_rate.value()),
-            'interp_step_px': int(self.spin_step.value()),
-            'deadzone_px': int(self.spin_dead.value()),
-            'speed': float(self.dbl_speed.value()),
+            'map': values['-MAP-'],
+            'interp': values['-INTERP-'],
+            'interp_rate_hz': int(values['-RATE-']),
+            'interp_step_px': int(values['-STEP-']),
+            'deadzone_px': int(values['-DEADZONE-']),
+            'speed': float(values['-SPEED-']),
         }
 
-    def request_control(self):
-        item = self.list.currentItem()
-        if not item:
-            self._set_status('Bitte ein Gerät wählen')
-            return
-        inst, info = item.data(QtCore.Qt.UserRole)
-        # Ensure server running
-        self.start_server()
-        self.discovery.send_request(info['ip'], self.current_options(), to=inst)
-        self._set_status('Anfrage gesendet – warte auf Bestätigung…')
-
-    def manual_connect(self):
-        host, ok = QtWidgets.QInputDialog.getText(self, 'Manuell verbinden', 'Ziel-Host/IP:')
-        if not ok or not host:
-            return
-        # Ensure server running
-        self.start_server()
-        self.discovery.send_request(host, self.current_options(), to=None)
-        self._set_status('Anfrage gesendet – warte auf Bestätigung…')
-
     def start_server(self):
-        if self.server_proc.state() != QtCore.QProcess.NotRunning:
+        if self.server_proc and self.server_proc.poll() is None:
             return
-        args = [os.path.join(os.path.dirname(__file__), 'server.py'), '--host', '0.0.0.0', '--port', str(self.ws_port), '--hotkey', self.combo_hotkey.currentText(), '--start-capturing']
-        if not self.chk_tx_mouse.isChecked():
+        args = [sys.executable, self._get_script_path('server.py'), '--host', '0.0.0.0', '--port', str(self.ws_port),
+                '--hotkey', self.window['-HOTKEY-'].get(), '--start-capturing']
+        if not self.window['-TX_MOUSE-'].get():
             args.append('--no-tx-mouse')
-        if not self.chk_tx_kb.isChecked():
+        if not self.window['-TX_KB-'].get():
             args.append('--no-tx-keyboard')
-        self.server_proc.start(sys.executable, args)
-        self._set_status(f'Server gestartet auf Port {self.ws_port}')
+        self.server_proc = subprocess.Popen(args)
+        self._set_status(f'Server started on port {self.ws_port}')
 
     def start_client(self, host: str, port: int, options: dict):
-        if self.client_proc.state() != QtCore.QProcess.NotRunning:
-            try:
-                self.client_proc.kill()
-            except Exception:
-                pass
-        args = [os.path.join(os.path.dirname(__file__), 'client.py'), host, '--port', str(port), '--map', options.get('map','relative'),
-                '--interp-rate-hz', str(int(options.get('interp_rate_hz',240))), '--interp-step-px', str(int(options.get('interp_step_px',10))),
-                '--deadzone-px', str(int(options.get('deadzone_px',1))), '--speed', str(float(options.get('speed',1.0)))]
+        if self.client_proc and self.client_proc.poll() is None:
+            self.client_proc.kill()
+        args = [sys.executable, self._get_script_path('client.py'), host, '--port', str(port),
+                '--map', options.get('map', 'relative'),
+                '--interp-rate-hz', str(int(options.get('interp_rate_hz', 240))),
+                '--interp-step-px', str(int(options.get('interp_step_px', 10))),
+                '--deadzone-px', str(int(options.get('deadzone_px', 1))),
+                '--speed', str(float(options.get('speed', 1.0)))]
         if options.get('interp', True):
             args.insert(6, '--interp')
-        self.client_proc.start(sys.executable, args)
+        self.client_proc = subprocess.Popen(args)
 
     def disconnect_client(self):
-        if self.client_proc.state() != QtCore.QProcess.NotRunning:
-            try:
-                self.client_proc.kill()
-            except Exception:
-                pass
-            self._set_status('Client getrennt')
+        if self.client_proc and self.client_proc.poll() is None:
+            self.client_proc.kill()
+            self.client_proc = None
+            self._set_status('Client disconnected')
         else:
-            self._set_status('Kein aktiver Client')
+            self._set_status('No active client')
 
     def install_requirements(self):
-        # Run: python -m pip install -r requirements.txt
-        proc = QtCore.QProcess(self)
-        proc.readyReadStandardOutput.connect(lambda: print('[Setup]', bytes(proc.readAllStandardOutput()).decode()))
-        proc.readyReadStandardError.connect(lambda: print('[Setup]', bytes(proc.readAllStandardError()).decode()))
-        proc.start(sys.executable, ['-m', 'pip', 'install', '-r', os.path.join(os.path.dirname(__file__), 'requirements.txt')])
+        subprocess.Popen([sys.executable, '-m', 'pip', 'install', '-r', self._get_script_path('requirements.txt')])
+
+    def cleanup(self):
+        if self.discovery:
+            self.discovery.stop()
+            self.discovery.join()
+        if self.server_proc:
+            self.server_proc.kill()
+        if self.client_proc:
+            self.client_proc.kill()
+        self.window.close()
 
 
 def main():
-    app = QtWidgets.QApplication(sys.argv)
-    w = MainWindow()
-    w.show()
-    sys.exit(app.exec())
+    app = App()
+    while True:
+        event, values = app.window.read()
+        if not app.handle_event(event, values):
+            break
+    app.cleanup()
 
 
 if __name__ == '__main__':
