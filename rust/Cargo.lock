@@ -666,6 +666,7 @@ dependencies = [
  "futures",
  "hostname",
  "libc",
+ "once_cell",
  "rdev",
  "serde",
  "serde_json",

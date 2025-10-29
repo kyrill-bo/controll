@@ -68,6 +68,8 @@ impl eframe::App for UiApp {
         self.poll_events();
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.heading("Controll - Devices");
+            let cap = if state::is_capture_on() { "ON" } else { "OFF" };
+            ui.label(format!("Capture: {}", cap));
             ui.label(&self.status);
         });
         egui::CentralPanel::default().show(ctx, |ui| {

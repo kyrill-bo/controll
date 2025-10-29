@@ -3,6 +3,7 @@ mod discovery;
 mod ws;
 mod gui;
 mod input;
+mod state;
 
 use discovery::{run_loop_with_sender, DiscEvent};
 use crate::discovery::Discovery;

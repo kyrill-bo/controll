@@ -1,6 +1,8 @@
 use futures::SinkExt;
 use rdev::{Event, EventType, Key};
 
+use crate::state::set_capture;
+
 pub fn run_capture_client(url: String) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     std::thread::spawn(move || {
