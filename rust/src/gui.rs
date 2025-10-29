@@ -1,5 +1,6 @@
 use crate::discovery::{DiscEvent, DeviceInfo};
 use crate::protocol::Message;
+use crate::state;
 use eframe::egui;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::sync::mpsc::Receiver;
