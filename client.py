@@ -36,6 +36,9 @@ class KVMClient:
         self.keyboard_controller = keyboard.Controller()
         # Letzte Mausposition, um unnötige Bewegungen zu sparen
         self._last_mouse_pos = None
+        # Letzte eingehende Koordinaten für Relative-Mode
+        self._last_incoming_norm = None  # (x_norm, y_norm)
+        self._last_incoming_abs = None   # (x_abs, y_abs)
         
         print(f"KVM Client - Verbinde zu {self.uri}")
     
@@ -79,6 +82,20 @@ class KVMClient:
                         cw, ch = pyautogui.size()
                         x_norm = max(0.0, min(1.0, float(data['x'])))
                         y_norm = max(0.0, min(1.0, float(data['y'])))
+
+                        # Relative Modus: auf Pixel-Deltas abbilden und relativ bewegen
+                        if self.map_mode == 'relative':
+                            if self._last_incoming_norm is None:
+                                self._last_incoming_norm = (x_norm, y_norm)
+                                return
+                            last_xn, last_yn = self._last_incoming_norm
+                            dx = int((x_norm - last_xn) * max(1, cw-1))
+                            dy = int((y_norm - last_yn) * max(1, ch-1))
+                            self._last_incoming_norm = (x_norm, y_norm)
+                            if dx != 0 or dy != 0:
+                                pyautogui.moveRel(dx, dy, duration=0)
+                            return
+
                         if self.map_mode == 'preserve' and data.get('src_w') and data.get('src_h'):
                             # Aspect-preserving Letterbox/Pillarbox Mapping
                             src_w = float(data['src_w'])
@@ -111,6 +128,17 @@ class KVMClient:
                         x, y = cw // 2, ch // 2
                 else:
                     x, y = int(data['x']), int(data['y'])
+                    if self.map_mode == 'relative':
+                        if self._last_incoming_abs is None:
+                            self._last_incoming_abs = (x, y)
+                            return
+                        last_x, last_y = self._last_incoming_abs
+                        dx = x - last_x
+                        dy = y - last_y
+                        self._last_incoming_abs = (x, y)
+                        if dx != 0 or dy != 0:
+                            pyautogui.moveRel(dx, dy, duration=0)
+                        return
 
                 # Optimierte Mausbewegung, Duplikate vermeiden
                 if self._last_mouse_pos != (x, y):
@@ -220,7 +248,7 @@ def main():
     parser = argparse.ArgumentParser(description='KVM Client - Remote Event Simulator')
     parser.add_argument('server_host', nargs='?', default='localhost', help='Server Host (default: localhost)')
     parser.add_argument('--port', type=int, default=8765, help='Server Port (default: 8765)')
-    parser.add_argument('--map', choices=['normalized','preserve'], default='normalized',
+    parser.add_argument('--map', choices=['normalized','preserve','relative'], default='normalized',
                         help='Mapping-Modus für Mausbewegung (normalized=volle Fläche, preserve=Seitenverhältnis erhalten)')
     args = parser.parse_args()
 
