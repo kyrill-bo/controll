@@ -191,12 +191,6 @@ class App:
 
         sg.theme('DarkBlue')
 
-        setup_layout = [
-            [sg.Text('Python:'), sg.Text(sys.executable, key='-PYTHON-')],
-            [sg.Text('WS-Port:'), sg.Spin(list(range(1024, 65535)), initial_value=self.ws_port, key='-WS_PORT-'),
-             sg.Button('Apply', key='-APPLY_PORT-')]
-        ]
-
         devices_layout = [
             [sg.Listbox([], size=(60, 10), key='-DEVICES-', enable_events=True)],
             [sg.Button('Request Control', key='-REQUEST-'), sg.Button('Manual Connect...', key='-MANUAL-'),
@@ -216,7 +210,6 @@ class App:
         ]
 
         layout = [
-            [sg.Frame('Setup', setup_layout)],
             [sg.Frame('Available Devices', devices_layout)],
             [sg.Frame('Settings', settings_layout)],
             [sg.StatusBar('Ready', key='-STATUS-')]
@@ -255,14 +248,6 @@ class App:
                 self._set_status('Control granted - Remote active')
             else:
                 self._set_status('Control denied')
-
-        elif event == '-APPLY_PORT-':
-            self.ws_port = int(values['-WS_PORT-'])
-            self.discovery.ws_port = self.ws_port
-            if self.server_proc:
-                self.server_proc.kill()
-                self.server_proc = None
-            self.start_server()
 
         elif event == '-REQUEST-':
             if not values['-DEVICES-']:
