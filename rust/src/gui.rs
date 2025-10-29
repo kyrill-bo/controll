@@ -87,6 +87,16 @@ impl eframe::App for UiApp {
                     if ui.button("Request Control").clicked() {
                         if let Some(i) = self.selected { if let Some(d) = self.devices.get(i) { self.send_request_unicast(&d.ip); self.status = format!("Requested {}", d.name); } }
                     }
+                    ui.horizontal(|ui| {
+                        if ui.button("Start Control").clicked() {
+                            crate::state::set_capture(true);
+                            self.status = "Capture ON".into();
+                        }
+                        if ui.button("Stop Control").clicked() {
+                            crate::state::set_capture(false);
+                            self.status = "Capture OFF".into();
+                        }
+                    });
                     let mut action: Option<(String, bool)> = None;
                     if let Some((from_name, ws_host, _ws_port)) = self.incoming.clone() {
                         ui.separator();
