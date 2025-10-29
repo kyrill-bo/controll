@@ -182,6 +182,7 @@ class KVMServer:
             except Exception:
                 # Fallback: falls Größe nicht ermittelbar ist, sende Rohdaten
                 x_norm, y_norm = None, None
+                sw, sh = None, None
 
             message = {
                 'type': 'mouse_move',
@@ -189,6 +190,8 @@ class KVMServer:
                 'x': x_norm if x_norm is not None else x,
                 'y': y_norm if y_norm is not None else y,
                 'timestamp': current_time,
+                'src_w': sw,
+                'src_h': sh,
                 'sync': False
             }
             try:

@@ -10,11 +10,12 @@ from pynput.keyboard import Key, Listener as KeyboardListener
 from pynput import keyboard
 
 class KVMClient:
-    def __init__(self, server_host='localhost', server_port=8765):
+    def __init__(self, server_host='localhost', server_port=8765, map_mode='normalized'):
         self.server_host = server_host
         self.server_port = server_port
         self.uri = f"ws://{server_host}:{server_port}"
         self.connected = False
+        self.map_mode = map_mode  # 'normalized' (default) or 'preserve'
         
         # PyAutoGUI Einstellungen für maximale Performance
         pyautogui.FAILSAFE = False  # Deaktiviert Fail-Safe
@@ -69,13 +70,39 @@ class KVMClient:
                 coord_mode = data.get('coord')
                 if coord_mode == 'normalized':
                     try:
-                        sw, sh = pyautogui.size()
-                        x = int(max(0.0, min(1.0, float(data['x']))) * max(1, sw-1))
-                        y = int(max(0.0, min(1.0, float(data['y']))) * max(1, sh-1))
+                        cw, ch = pyautogui.size()
+                        x_norm = max(0.0, min(1.0, float(data['x'])))
+                        y_norm = max(0.0, min(1.0, float(data['y'])))
+                        if self.map_mode == 'preserve' and data.get('src_w') and data.get('src_h'):
+                            # Aspect-preserving Letterbox/Pillarbox Mapping
+                            src_w = float(data['src_w'])
+                            src_h = float(data['src_h'])
+                            if src_w <= 0 or src_h <= 0:
+                                raise ValueError('invalid src size')
+                            src_aspect = src_w / src_h
+                            dst_aspect = cw / ch if ch else 1.0
+                            if dst_aspect >= src_aspect:
+                                # Client ist relativ breiter -> Höhe voll, Seitenbänder
+                                target_h = ch
+                                target_w = int(round(target_h * src_aspect))
+                                x_off = (cw - target_w) // 2
+                                y_off = 0
+                            else:
+                                # Client ist relativ höher -> Breite voll, obere/untere Bänder
+                                target_w = cw
+                                target_h = int(round(target_w / src_aspect))
+                                x_off = 0
+                                y_off = (ch - target_h) // 2
+                            x = int(x_off + x_norm * max(1, target_w-1))
+                            y = int(y_off + y_norm * max(1, target_h-1))
+                        else:
+                            # Vollflächig strecken (Standard)
+                            x = int(x_norm * max(1, cw-1))
+                            y = int(y_norm * max(1, ch-1))
                     except Exception:
                         # Fallback auf Mitte, wenn etwas schief geht
-                        sw, sh = pyautogui.size()
-                        x, y = sw // 2, sh // 2
+                        cw, ch = pyautogui.size()
+                        x, y = cw // 2, ch // 2
                 else:
                     x, y = int(data['x']), int(data['y'])
 
@@ -176,14 +203,16 @@ class KVMClient:
                 await asyncio.sleep(5)
 
 def main():
-    import sys
-    
-    server_host = 'localhost'
-    if len(sys.argv) > 1:
-        server_host = sys.argv[1]
-    
-    client = KVMClient(server_host)
-    
+    import argparse
+    parser = argparse.ArgumentParser(description='KVM Client - Remote Event Simulator')
+    parser.add_argument('server_host', nargs='?', default='localhost', help='Server Host (default: localhost)')
+    parser.add_argument('--port', type=int, default=8765, help='Server Port (default: 8765)')
+    parser.add_argument('--map', choices=['normalized','preserve'], default='normalized',
+                        help='Mapping-Modus für Mausbewegung (normalized=volle Fläche, preserve=Seitenverhältnis erhalten)')
+    args = parser.parse_args()
+
+    client = KVMClient(args.server_host, args.port, map_mode=args.map)
+
     try:
         asyncio.run(client.run())
     except KeyboardInterrupt:
