@@ -17,7 +17,8 @@ class KVMServer:
     def __init__(self, host='0.0.0.0', port=8765,
                  transmit_mouse: bool = True,
                  transmit_keyboard: bool = True,
-                 switch_hotkey: str = 'f13'):
+                 switch_hotkey: str = 'f13',
+                 auto_start_capturing: bool = False):
         self.host = host
         self.port = port
         self.clients = set()
@@ -41,6 +42,7 @@ class KVMServer:
         self.lock_cursor_when_remote = True
         self._cursor_locked_pos = None
         self._is_warping_cursor = False
+        self.auto_start_capturing = auto_start_capturing
         
         # Hotkey für das Umschalten (konfigurierbar, Standard F13)
         self.switch_hotkey = self._parse_hotkey(switch_hotkey)
@@ -438,6 +440,10 @@ class KVMServer:
         """WebSocket-Server starten"""
         self.loop = asyncio.get_running_loop()
         self.start_listeners()
+        # Optional: Capturing automatisch aktivieren
+        if self.auto_start_capturing and not self.capturing:
+            # Unterdrückung entsprechend Flags setzen
+            self.toggle_capturing()
         
         try:
             # Wrapper-Funktion für bessere Kompatibilität
@@ -496,13 +502,16 @@ def main():
                         help='Tastatur-Ereignisse übertragen (Default an)')
     parser.add_argument('--no-tx-keyboard', dest='tx_keyboard', action='store_false',
                         help='Tastatur-Ereignisse nicht übertragen')
+    parser.add_argument('--start-capturing', action='store_true',
+                        help='Beim Start Remote-Capturing automatisch aktivieren')
     
     args = parser.parse_args()
     
     server = KVMServer(host=args.host, port=args.port,
                        transmit_mouse=args.tx_mouse,
                        transmit_keyboard=args.tx_keyboard,
-                       switch_hotkey=args.hotkey)
+                       switch_hotkey=args.hotkey,
+                       auto_start_capturing=args.start_capturing)
     if args.no_suppress_mouse:
         server.suppress_mouse = False
     if args.no_suppress_keyboard:

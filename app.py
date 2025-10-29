@@ -20,6 +20,7 @@ from tkinter import ttk, messagebox
 MCAST_GRP = '239.255.255.250'
 MCAST_PORT = 54545
 BEACON_INTERVAL = 2.0
+DEVICE_TTL = 3 * BEACON_INTERVAL + 2.0  # Sekunden bis Eintrag als veraltet gilt
 
 
 def get_primary_ip() -> str:
@@ -95,10 +96,23 @@ class DiscoveryService:
             mreq = struct.pack('4s4s', socket.inet_aton(MCAST_GRP), socket.inet_aton('0.0.0.0'))
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             sock.settimeout(1.0)
+            last_prune = 0.0
             while not self._stop.is_set():
                 try:
                     data, addr = sock.recvfrom(65535)
                 except socket.timeout:
+                    # Gelegenheit zum Aufräumen veralteter Geräte
+                    now = time.time()
+                    if now - last_prune > 2.0:
+                        removed = []
+                        with self._lock:
+                            for inst, info in list(self._devices.items()):
+                                if now - info.get('last_seen', now) > DEVICE_TTL:
+                                    removed.append(inst)
+                                    del self._devices[inst]
+                        if removed and self.on_update:
+                            self.on_update(self.devices())
+                        last_prune = now
                     continue
                 try:
                     msg = json.loads(data.decode('utf-8'))
@@ -199,10 +213,15 @@ class App:
 
         self.btn_connect = ttk.Button(frm, text='Steuerung anfordern', command=self.request_control)
         self.btn_connect.grid(row=2, column=0, sticky='w')
+        self.btn_disconnect = ttk.Button(frm, text='Trennen', command=self.disconnect_client)
+        self.btn_disconnect.grid(row=2, column=1, sticky='w')
         self.btn_settings = ttk.Button(frm, text='Einstellungen', command=self.open_settings)
-        self.btn_settings.grid(row=2, column=1, sticky='w', padx=8)
+        self.btn_settings.grid(row=2, column=2, sticky='w', padx=8)
+        self.btn_manual = ttk.Button(frm, text='Manuell verbinden…', command=self.open_manual_connect)
+        self.btn_manual.grid(row=2, column=3, sticky='w')
         self.lbl_status = ttk.Label(frm, text='Bereit')
-        self.lbl_status.grid(row=2, column=2, sticky='e')
+        self.lbl_status.grid(row=3, column=0, columnspan=4, sticky='we', pady=(8,0))
+        self.listbox.bind('<Double-Button-1>', lambda e: self.request_control())
 
         # Discovery
         self.discovery = DiscoveryService(
@@ -258,7 +277,7 @@ class App:
         # Launch server as subprocess to keep macOS event taps on main thread of its process
         args = [sys.executable, os.path.join(os.path.dirname(__file__), 'server.py'),
                 '--host', '0.0.0.0', '--port', str(self.ws_port),
-                '--hotkey', self.var_hotkey.get()]
+                '--hotkey', self.var_hotkey.get(), '--start-capturing']
         if not self.var_tx_mouse.get():
             args.append('--no-tx-mouse')
         if not self.var_tx_keyboard.get():
@@ -327,6 +346,57 @@ class App:
         self.discovery.send_request(info['ip'], payload)
         self.lbl_status.config(text='Anfrage gesendet – warte auf Bestätigung…')
 
+    def open_manual_connect(self):
+        """Dialog für manuelle Verbindung (Fallback bei blockiertem Multicast)."""
+        w = tk.Toplevel(self.root)
+        w.title('Manuell verbinden')
+        frm = ttk.Frame(w, padding=12)
+        frm.grid(sticky='nsew')
+        w.columnconfigure(0, weight=1)
+        w.rowconfigure(0, weight=1)
+
+        host_var = tk.StringVar()
+
+        ttk.Label(frm, text='Ziel-Host/IP:').grid(row=0, column=0, sticky='w')
+        ttk.Entry(frm, textvariable=host_var, width=24).grid(row=0, column=1, sticky='w')
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=1, column=0, columnspan=2, pady=8, sticky='e')
+        def _ok():
+            host = host_var.get().strip()
+            if not host:
+                messagebox.showerror('Fehler', 'Bitte Host/IP angeben.')
+                return
+            w.destroy()
+            self.manual_request_control(host)
+        ttk.Button(btns, text='Abbrechen', command=w.destroy).grid(row=0, column=0, padx=6)
+        ttk.Button(btns, text='Anfordern', command=_ok).grid(row=0, column=1)
+
+    def manual_request_control(self, host: str):
+        """Sende eine direkte Anfrage an einen Host (ohne Geräte-ID-Filter)."""
+        # Server lokal sicherstellen
+        self.start_server()
+        options = {
+            'map': self.var_map.get(),
+            'interp': self.var_interp.get(),
+            'interp_rate_hz': self.var_interp_rate.get(),
+            'interp_step_px': self.var_interp_step.get(),
+            'deadzone_px': self.var_deadzone.get(),
+            'speed': self.var_speed.get(),
+        }
+        payload = {
+            # kein 'to' -> jedes Ziel akzeptiert und fragt Benutzer
+            'name': self.name,
+            'ws_host': get_primary_ip(),
+            'ws_port': self.ws_port,
+            'options': options,
+        }
+        try:
+            self.discovery.send_request(host, payload)
+            self.lbl_status.config(text='Anfrage gesendet – warte auf Bestätigung…')
+        except Exception as e:
+            messagebox.showerror('Fehler', f'Anfrage fehlgeschlagen: {e}')
+
     def open_settings(self):
         w = tk.Toplevel(self.root)
         w.title('Einstellungen')
@@ -371,6 +441,17 @@ class App:
         except Exception:
             pass
         self.root.destroy()
+
+    def disconnect_client(self):
+        """Beende die Client-Verbindung (falls aktiv)."""
+        try:
+            if self.client_proc and self.client_proc.poll() is None:
+                self.client_proc.terminate()
+                self.lbl_status.config(text='Client getrennt')
+            else:
+                self.lbl_status.config(text='Kein aktiver Client')
+        except Exception:
+            self.lbl_status.config(text='Trennen fehlgeschlagen')
 
 
 def main():
