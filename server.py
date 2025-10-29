@@ -174,10 +174,20 @@ class KVMServer:
         
         # Nur im Remote-Capturing senden (ein Gerät aktiv)
         if self.clients and self.capturing:  # Nur senden wenn Clients verbunden und Capturing aktiv ist
+            # Koordinaten normalisieren, damit Client-Bildschirmgröße voll genutzt wird
+            try:
+                sw, sh = pyautogui.size()
+                x_norm = max(0.0, min(1.0, x / sw)) if sw else 0.0
+                y_norm = max(0.0, min(1.0, y / sh)) if sh else 0.0
+            except Exception:
+                # Fallback: falls Größe nicht ermittelbar ist, sende Rohdaten
+                x_norm, y_norm = None, None
+
             message = {
                 'type': 'mouse_move',
-                'x': x,
-                'y': y,
+                'coord': 'normalized' if x_norm is not None else 'absolute',
+                'x': x_norm if x_norm is not None else x,
+                'y': y_norm if y_norm is not None else y,
                 'timestamp': current_time,
                 'sync': False
             }

@@ -65,8 +65,21 @@ class KVMClient:
         
         try:
             if event_type == 'mouse_move':
+                # Koordinaten ggf. von normalisiert [0,1] in Bildschirm-Pixel umrechnen
+                coord_mode = data.get('coord')
+                if coord_mode == 'normalized':
+                    try:
+                        sw, sh = pyautogui.size()
+                        x = int(max(0.0, min(1.0, float(data['x']))) * max(1, sw-1))
+                        y = int(max(0.0, min(1.0, float(data['y']))) * max(1, sh-1))
+                    except Exception:
+                        # Fallback auf Mitte, wenn etwas schief geht
+                        sw, sh = pyautogui.size()
+                        x, y = sw // 2, sh // 2
+                else:
+                    x, y = int(data['x']), int(data['y'])
+
                 # Optimierte Mausbewegung ohne Dauer-Parameter, Duplikate vermeiden
-                x, y = data['x'], data['y']
                 if self._last_mouse_pos != (x, y):
                     pyautogui.moveTo(x, y, duration=0)
                     self._last_mouse_pos = (x, y)
